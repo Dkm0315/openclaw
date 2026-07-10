@@ -191,6 +191,7 @@ export type QaSuiteRunParams = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  failFast?: boolean;
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
@@ -468,11 +469,12 @@ async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteS
 function createScenarioFlowApi(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  runScenarioWithSteps: typeof runScenario = runScenario,
 ) {
   return createQaSuiteScenarioFlowApi({
     env,
     scenario,
-    runScenario,
+    runScenario: runScenarioWithSteps,
     splitModelRef,
     formatErrorMessage,
     liveTurnTimeoutMs,
@@ -485,11 +487,45 @@ function createScenarioFlowApi(
   });
 }
 
+function createScenarioStepRunner(
+  env: QaSuiteEnvironment,
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  vars: Record<string, unknown>,
+): typeof runScenario {
+  const prepareFlow = env.transport.prepareFlow;
+  const execution = scenario.execution;
+  if (!prepareFlow || execution.kind !== "flow") {
+    return runScenario;
+  }
+  return async (name, steps) =>
+    await runScenario(name, [
+      {
+        name: `Prepare ${env.transport.label}`,
+        run: async () => {
+          const prepared = await prepareFlow({
+            config: execution.config ?? {},
+            gateway: env.gateway,
+            outputDir: env.outputDir,
+            timeoutMs: execution.timeoutMs ?? liveTurnTimeoutMs(env, 60_000),
+          });
+          if (prepared) {
+            Object.assign(vars, prepared);
+          }
+        },
+      },
+      ...steps,
+    ]);
+}
+
 async function runScenarioDefinition(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
 ) {
-  const api = createScenarioFlowApi(env, scenario);
+  if (scenario.execution.kind !== "flow") {
+    throw new Error(`scenario is not a flow: ${scenario.id}`);
+  }
+  const vars: Record<string, unknown> = {};
+  const api = createScenarioFlowApi(env, scenario, createScenarioStepRunner(env, scenario, vars));
   if (!scenario.execution.flow) {
     throw new Error(`scenario missing flow: ${scenario.id}`);
   }
@@ -497,6 +533,7 @@ async function runScenarioDefinition(
     api,
     flow: scenario.execution.flow,
     scenarioTitle: scenario.title,
+    vars,
   });
 }
 
@@ -1326,30 +1363,44 @@ async function captureGatewayHeapSnapshotCheckpoint(params: {
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const providerMode = normalizeQaProviderMode(
+  const requestedProviderMode = normalizeQaProviderMode(
     params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const transportId = normalizeQaTransportId(params?.transportId);
-  const primaryModel = normalizeQaSuiteModelRef(
+  const requestedPrimaryModel = normalizeQaSuiteModelRef(
     params?.primaryModel,
-    defaultQaModelForMode(providerMode),
+    defaultQaModelForMode(requestedProviderMode),
   );
-  const alternateModel = normalizeQaSuiteModelRef(
+  const requestedAlternateModel = normalizeQaSuiteModelRef(
     params?.alternateModel,
-    defaultQaModelForMode(providerMode, true),
+    defaultQaModelForMode(requestedProviderMode, true),
   );
-  const fastMode = params?.fastMode ?? isQaFastModeEnabled({ primaryModel, alternateModel });
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const catalog = readQaBootstrapScenarioCatalog();
   const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
     scenarioIds: params?.scenarioIds,
-    providerMode,
-    primaryModel,
+    providerMode: requestedProviderMode,
+    primaryModel: requestedPrimaryModel,
     channelDriver: params?.channelDriver ?? params?.channelDriverSelection?.channelDriver,
     channel: params?.channelId ?? params?.channelDriverSelection?.channel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
+  const selectedProviderMode =
+    selectedScenarios.length === 1 && selectedScenarios[0]?.execution.kind === "flow"
+      ? selectedScenarios[0].execution.providerMode
+      : undefined;
+  const providerMode = selectedProviderMode ?? requestedProviderMode;
+  const primaryModel = selectedProviderMode
+    ? defaultQaModelForMode(providerMode)
+    : requestedPrimaryModel;
+  const alternateModel = selectedProviderMode
+    ? defaultQaModelForMode(providerMode, true)
+    : requestedAlternateModel;
+  const fastMode =
+    typeof params?.fastMode === "boolean"
+      ? params.fastMode
+      : isQaFastModeEnabled({ primaryModel, alternateModel });
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedScenarios),
@@ -1365,11 +1416,13 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       (params?.channelDriverSelection?.channelDriver === "crabline" ? "default" : "sut"),
   );
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedScenarios);
-  const concurrency = normalizeQaSuiteConcurrency(
-    params?.concurrency,
-    selectedScenarios.length,
-    params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
-  );
+  const concurrency = params?.failFast
+    ? 1
+    : normalizeQaSuiteConcurrency(
+        params?.concurrency,
+        selectedScenarios.length,
+        params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
+      );
   const progressEnabled = shouldLogQaSuiteProgress();
   const gatewayHeapCheckpointsEnabled = shouldCaptureGatewayHeapCheckpoints();
   writeQaSuiteProgress(
@@ -1435,7 +1488,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       channelDriver: params?.channelDriver,
       channelId: params?.channelId,
       channelDriverSelection: params?.channelDriverSelection,
-      adapterOptions: params?.adapterOptions,
+      adapterOptions: {
+        ...params?.adapterOptions,
+        scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+      },
       cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
       outputDir,
       state: lab.state,
@@ -1615,7 +1671,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             return scenarioResult;
           }
         },
-        { startStaggerMs: workerStartStaggerMs },
+        {
+          startStaggerMs: workerStartStaggerMs,
+          shouldStop: (result) => params?.failFast === true && result.status === "fail",
+        },
       );
       await artifactWriteQueue;
       const finishedAt = new Date();
@@ -1715,7 +1774,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     channelDriver: params?.channelDriver,
     channelId: params?.channelId,
     channelDriverSelection: params?.channelDriverSelection,
-    adapterOptions: params?.adapterOptions,
+    adapterOptions: {
+      ...params?.adapterOptions,
+      scenarioIds: selectedScenarios.map((scenario) => scenario.id),
+    },
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
     transportPolicy: collectQaSuiteTransportPolicy(selectedScenarios),
@@ -1783,6 +1845,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       lab,
       mock: activeMock,
       gateway: activeGateway,
+      outputDir,
       // YAML scenarios should see the full staged gateway config, not just
       // the transport fragment. Routing/session/plugin assertions depend on it.
       cfg: activeGateway.cfg,
@@ -1869,14 +1932,18 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         scenarios: [...liveScenarioOutcomes],
       });
 
-      const result = await runQaScenarioWithFlakeRetry(
-        () => runScenarioDefinition(activeEnv, scenario),
-        () =>
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-          ),
-      );
+      const runSelectedScenario = () => runScenarioDefinition(activeEnv, scenario);
+      const scenarioRetryCount =
+        scenario.execution.kind === "flow" ? scenario.execution.retryCount : undefined;
+      const result =
+        scenarioRetryCount === 0
+          ? await runSelectedScenario()
+          : await runQaScenarioWithFlakeRetry(runSelectedScenario, () =>
+              writeQaSuiteProgress(
+                progressEnabled,
+                `scenario retry (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+              ),
+            );
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(result);
       writeQaSuiteProgress(
@@ -1898,6 +1965,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         startedAt: startedAt.toISOString(),
         scenarios: [...liveScenarioOutcomes],
       });
+      if (params?.failFast === true && result.status === "fail") {
+        break;
+      }
     }
 
     const runtimeParityScenario = scenarios[0];
@@ -2040,6 +2110,7 @@ export const qaSuiteProgressTesting = {
   buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
   createQaSuiteTransportAdapter,
+  createScenarioStepRunner,
   formatQaSuiteRunStartProgress,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
