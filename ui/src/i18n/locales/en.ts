@@ -3257,6 +3257,10 @@ export const en: TranslationMap = {
     catalog: {
       remoteViewOnly: "This session is on a paired node and is view-only.",
       unsupportedViewOnly: "This external session source is view-only.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Suggested follow-up",
@@ -3300,6 +3304,9 @@ export const en: TranslationMap = {
     sendShortcut: "Send shortcut",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Disabled during setup",
     gatewayStatus: "Gateway status: {status}",
     commandPaletteTitle: "Search or jump to… (⌘K)",
