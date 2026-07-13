@@ -1324,6 +1324,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl({ readThread: vi.fn(async () => sourceThread) });
+    const baselines: Array<{ connectionFingerprint: string; turnId: string | null }> = [];
 
     const first = await continueLocalCodexSession({
       api,
@@ -1331,6 +1332,7 @@ describe("Codex supervision actions", () => {
       config,
       control,
       threadId: "thread-1",
+      onContinued: (baseline) => baselines.push(baseline),
     });
     const second = await continueLocalCodexSession({
       api,
@@ -1338,6 +1340,7 @@ describe("Codex supervision actions", () => {
       config,
       control,
       threadId: "thread-1",
+      onContinued: (baseline) => baselines.push(baseline),
     });
 
     expect(first).toEqual({
@@ -1345,6 +1348,10 @@ describe("Codex supervision actions", () => {
       disposition: "forked",
     });
     expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
+    expect(baselines).toEqual([
+      { connectionFingerprint: "catalog-connection", turnId: "turn-failed" },
+      { connectionFingerprint: "catalog-connection", turnId: "turn-failed" },
+    ]);
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).toHaveBeenCalledWith(
@@ -1404,7 +1411,7 @@ describe("Codex supervision actions", () => {
     });
     expect(control.readThread).toHaveBeenCalledTimes(2);
     expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
-    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
+    expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", true);
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
@@ -1943,13 +1950,13 @@ describe("Codex supervision actions", () => {
       sessionKey,
       disposition: "existing",
     });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(control.readThread).toHaveBeenCalledWith("thread-1", true);
     expect(patchSessionEntry).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
   });
 
   it.each([
-    { name: "mapped", mapped: true, includeTurns: false },
+    { name: "mapped", mapped: true, includeTurns: true },
     { name: "unmapped", mapped: false, includeTurns: true },
   ])(
     "rejects a $name Continue when the fresh read returns a different thread",

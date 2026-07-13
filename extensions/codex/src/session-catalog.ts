@@ -15,7 +15,6 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type {
   SessionCatalogHost,
   SessionCatalogProvider,
-  SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -46,6 +45,7 @@ import {
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { importCodexThreadHistoryToTranscript } from "./app-server/transcript-mirror.js";
 import { codexControlRequest } from "./command-rpc.js";
+import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
 import type {
   CodexSessionCatalogError,
   CodexSessionCatalogHost,
@@ -56,6 +56,7 @@ import type {
   CodexSessionCatalogSession,
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
+import * as upstream from "./session-upstream-activity.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -91,7 +92,7 @@ type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][
 
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 
-type CodexSessionCatalogControl = {
+export type CodexSessionCatalogControl = {
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
@@ -1510,6 +1511,7 @@ async function continueLocalCodexSessionInner(params: {
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
   threadId: string;
+  onContinued?: (upstream: { connectionFingerprint: string; turnId: string | null }) => void;
 }): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
   await requireCatalogEligibleThread(params.control, params.threadId);
   const existing = await findAdoptedSessionEntry({
@@ -1519,7 +1521,7 @@ async function continueLocalCodexSessionInner(params: {
     threadId: params.threadId,
   });
   if (existing) {
-    const sourceThread = await params.control.readThread(params.threadId, false);
+    const sourceThread = await params.control.readThread(params.threadId, true);
     if (sourceThread.id !== params.threadId) {
       throw new Error("Codex app-server returned a different thread than requested");
     }
@@ -1546,6 +1548,13 @@ async function continueLocalCodexSessionInner(params: {
     if (!restored) {
       throw changedError();
     }
+    const connectionFingerprint = params.control.connectionFingerprint;
+    if (connectionFingerprint) {
+      params.onContinued?.({
+        connectionFingerprint,
+        turnId: lastTerminalTurnId(sourceThread) ?? null,
+      });
+    }
     return { sessionKey: existing.key, disposition: "existing" };
   }
 
@@ -1567,6 +1576,10 @@ async function continueLocalCodexSessionInner(params: {
     sourceThread,
     connectionFingerprint,
   });
+  params.onContinued?.({
+    connectionFingerprint,
+    turnId: lastTerminalTurnId(sourceThread) ?? null,
+  });
   return { sessionKey: adopted.key, disposition: "forked" };
 }
 
@@ -1577,6 +1590,7 @@ async function continueLocalCodexSession(params: {
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
   threadId: string;
+  onContinued?: (upstream: { connectionFingerprint: string; turnId: string | null }) => void;
 }): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
   const current = continueOperations.get(params.threadId);
   if (current) {
@@ -1722,50 +1736,6 @@ function toGenericCatalogHost(host: CodexSessionCatalogHost): SessionCatalogHost
   };
 }
 
-const CODEX_MESSAGE_TYPES = new Map<string, SessionCatalogTranscriptItem["type"]>([
-  ["userMessage", "userMessage"],
-  ["agentMessage", "agentMessage"],
-  ["reasoning", "reasoning"],
-]);
-
-const CODEX_TOOL_TYPES = new Set([
-  "commandExecution",
-  "fileChange",
-  "mcpToolCall",
-  "dynamicToolCall",
-  "collabAgentToolCall",
-  "webSearch",
-  "imageView",
-  "imageGeneration",
-]);
-
-function toGenericTranscriptItem(item: import("./app-server/protocol.js").CodexThreadItem) {
-  let type = CODEX_MESSAGE_TYPES.get(item.type);
-  if (!type && CODEX_TOOL_TYPES.has(item.type)) {
-    const hasResult = item.result !== undefined || Boolean(item.aggregatedOutput);
-    type = hasResult ? "toolResult" : "toolCall";
-  }
-  type ??= "other";
-  const fallback = item.title ?? item.name ?? item.tool ?? item.command ?? item.query ?? undefined;
-  const resultText =
-    item.aggregatedOutput ||
-    (item.result === undefined ? undefined : JSON.stringify(item.result, null, 2));
-  // fileChange items carry only a changes array; render it so edits are not
-  // reduced to an unsupported-item placeholder. The protocol type declares
-  // changes as always present, but raw projections can omit it.
-  const changesText = Array.isArray(item.changes)
-    ? item.changes.map((change) => `${change.kind}: ${change.path}`).join("\n") || undefined
-    : undefined;
-  const text = item.text || resultText || changesText || fallback;
-  return {
-    id: item.id,
-    type,
-    ...(text ? { text } : {}),
-    raw: item as SessionCatalogTranscriptItem["raw"],
-  } satisfies SessionCatalogTranscriptItem;
-}
-
-/** Registers the generic session catalog while preserving node command contracts. */
 function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
@@ -1804,15 +1774,34 @@ function registerCodexSessionCatalog(params: {
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
       }
+      let upstreamBaseline: { connectionFingerprint: string; turnId: string | null } | undefined;
       const continued = await continueLocalCodexSession({
         api: params.api,
         bindingStore: params.bindingStore,
         config,
         control: params.control,
         threadId: request.threadId,
+        onContinued: (baseline) => {
+          upstreamBaseline = baseline;
+        },
       });
-      return { sessionKey: continued.sessionKey };
+      return {
+        sessionKey: continued.sessionKey,
+        ...(upstreamBaseline
+          ? {
+              upstream: {
+                kind: "codex-app-server" as const,
+                ref: {
+                  connectionFingerprint: upstreamBaseline.connectionFingerprint,
+                  threadId: request.threadId,
+                },
+                marker: { turnId: upstreamBaseline.turnId },
+              },
+            }
+          : {}),
+      };
     },
+    checkUpstreamActivity: upstream.createChecker(params),
     archive: async (request) => {
       const runnerConfirmation: unknown = request.confirmNoOtherRunner;
       if (runnerConfirmation !== true) {
