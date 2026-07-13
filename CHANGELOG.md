@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
+- **CLI legacy package updates:** reject unsupported Node runtimes from the package preinstall before an older updater can replace a working OpenClaw release with one it cannot start.
 - **Web Readability relative links:** seed parsed documents with the request URL so article links resolve correctly while removing the plugin's duplicate lazy-loader facade. (#106860)
 - **Browser auto-routing:** fall back to the Gateway host when an implicitly selected browser node reports that its control host is unreachable, while preserving explicit node pins and ambiguous action failures.
 - **Discord voice participant context:** maintain the live Gateway voice-state roster and include current channel participants in authorized voice agent turns so agents can answer who is present.

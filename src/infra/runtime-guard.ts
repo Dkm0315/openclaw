@@ -1,4 +1,4 @@
-// Validates the current runtime against OpenClaw's Node engine floor.
+// Validates the current runtime against OpenClaw's supported Node ranges.
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { RuntimeEnv } from "../runtime.js";
@@ -24,6 +24,7 @@ type Semver = {
 const MIN_NODE_22: Semver = { major: 22, minor: 22, patch: 3 };
 const MIN_NODE_24: Semver = { major: 24, minor: 15, patch: 0 };
 const MIN_NODE_25: Semver = { major: 25, minor: 9, patch: 0 };
+export const SUPPORTED_NODE_RANGE = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
 const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -176,7 +177,7 @@ export function assertSupportedRuntime(
   const requirement =
     details.kind === "bun"
       ? "openclaw cannot run under Bun because the runtime does not provide node:sqlite."
-      : "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.";
+      : `openclaw requires Node ${SUPPORTED_NODE_RANGE.replace(" || ", ", ").replace(" || ", ", or ")}.`;
   const retryHint =
     details.kind === "bun"
       ? "Run OpenClaw with Node; Bun remains supported for installs and package scripts."
