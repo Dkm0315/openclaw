@@ -229,7 +229,7 @@ export function startSessionUpstreamMonitor(
     }
     running = true;
     void runSessionUpstreamMonitorTick(options)
-      .catch((error) => {
+      .catch((error: unknown) => {
         log.warn(`upstream monitor tick failed: ${String(error)}`);
       })
       .finally(() => {
