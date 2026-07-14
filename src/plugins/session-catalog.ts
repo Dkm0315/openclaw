@@ -34,14 +34,15 @@ export type SessionUpstreamProbe = {
   upstreamKind: SessionUpstreamKind;
   upstreamRef: SessionUpstreamJsonValue;
   marker: SessionUpstreamJsonValue | null;
+  ownRecentUserTexts: string[];
 };
 
 export type SessionUpstreamActivity = {
   sessionKey: string;
-  occurredAt: number;
   humanTurns: number;
   nextMarker: SessionUpstreamJsonValue;
-  dedupeToken: string;
+  occurredAt?: number;
+  dedupeToken?: string;
 };
 
 export type SessionCatalogContinueProviderResult = {

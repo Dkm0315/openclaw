@@ -1,13 +1,12 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
-import type {
-  SessionCatalogProvider,
-  SessionUpstreamActivity,
-  SessionUpstreamProbe,
-} from "../plugins/session-catalog.js";
+import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { recordSessionHumanDirectMessage } from "./session-state-events.js";
 import {
@@ -17,7 +16,7 @@ import {
 
 export const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
 const SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS = 15_000;
-const SESSION_UPSTREAM_SELF_ECHO_WINDOW_MS = 15_000;
+const SESSION_UPSTREAM_OWN_USER_TEXT_LIMIT = 10;
 
 const log = createSubsystemLogger("sessions/upstream-monitor");
 
@@ -26,6 +25,10 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   now?: () => number;
   loadEntry?: typeof loadSessionEntry;
   isRunActive?: typeof isEmbeddedAgentRunActive;
+  loadOwnRecentUserTexts?: (params: {
+    entry: SessionEntry;
+    probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
+  }) => Promise<string[]>;
 };
 
 export type SessionUpstreamMonitor = { stop: () => void };
@@ -43,26 +46,51 @@ function databaseOptions(options: SessionUpstreamMonitorOptions): OpenClawStateD
   };
 }
 
-function isSelfEcho(
-  probe: SessionUpstreamProbe,
-  activity: SessionUpstreamActivity,
+function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+async function loadOwnRecentUserTexts(
+  probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">,
+  entry: SessionEntry,
   options: SessionUpstreamMonitorOptions,
-): boolean {
+): Promise<string[]> {
+  if (options.loadOwnRecentUserTexts) {
+    return await options.loadOwnRecentUserTexts({ entry, probe });
+  }
+  const storePath = resolveSessionStorePathForScope({
+    agentId: probe.agentId,
+    sessionKey: probe.sessionKey,
+    ...(options.env ? { env: options.env } : {}),
+  });
+  const recent = await readRecentUserAssistantTextForSession({
+    agentId: probe.agentId,
+    sessionKey: probe.sessionKey,
+    storePath,
+    limit: SESSION_UPSTREAM_OWN_USER_TEXT_LIMIT,
+    preferUpstreamUserText: true,
+    role: "user",
+  });
+  return recent.map((item) => normalizeUserText(item.text)).filter(Boolean);
+}
+
+async function probeProvenanceUnchanged(
+  probe: SessionUpstreamProbe,
+  options: SessionUpstreamMonitorOptions,
+): Promise<boolean> {
   const entry = (options.loadEntry ?? loadSessionEntry)({
     sessionKey: probe.sessionKey,
     agentId: probe.agentId,
     clone: false,
     ...(options.env ? { env: options.env } : {}),
   });
-  if (entry?.sessionId && (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)) {
-    return true;
+  if (!entry?.sessionId || (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)) {
+    return false;
   }
-  // OpenClaw's own upstream turn updates local activity nearly simultaneously.
-  // Consume that upstream marker or the next cadence would misreport it as external.
-  return [entry?.lastInteractionAt, entry?.lastActivityAt].some(
-    (timestamp) =>
-      typeof timestamp === "number" &&
-      Math.abs(timestamp - activity.occurredAt) <= SESSION_UPSTREAM_SELF_ECHO_WINDOW_MS,
+  const current = await loadOwnRecentUserTexts(probe, entry, options);
+  return (
+    current.length === probe.ownRecentUserTexts.length &&
+    current.every((text, index) => text === probe.ownRecentUserTexts[index])
   );
 }
 
@@ -78,8 +106,9 @@ export async function runSessionUpstreamMonitorTick(
     if (!provider?.checkUpstreamActivity) {
       continue;
     }
-    const probes = links.map(
-      (link): SessionUpstreamProbe => ({
+    const probes: SessionUpstreamProbe[] = [];
+    for (const link of links) {
+      const probe = {
         sessionKey: link.sessionKey,
         agentId: link.agentId,
         threadId: link.threadId,
@@ -87,26 +116,58 @@ export async function runSessionUpstreamMonitorTick(
         upstreamKind: link.upstreamKind,
         upstreamRef: link.upstreamRef,
         marker: link.marker,
-      }),
-    );
+      } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
+      const entry = (options.loadEntry ?? loadSessionEntry)({
+        sessionKey: probe.sessionKey,
+        agentId: probe.agentId,
+        clone: false,
+        ...(options.env ? { env: options.env } : {}),
+      });
+      // Active runs may still append upstream user items. Defer the scan so their
+      // marker remains available for positive transcript-provenance matching.
+      if (!entry?.sessionId || (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)) {
+        continue;
+      }
+      try {
+        probes.push({
+          ...probe,
+          ownRecentUserTexts: await loadOwnRecentUserTexts(probe, entry, options),
+        });
+      } catch (error) {
+        log.warn(`upstream transcript provenance failed for ${probe.sessionKey}: ${String(error)}`);
+      }
+    }
+    if (probes.length === 0) {
+      continue;
+    }
     const probeBySessionKey = new Map(probes.map((probe) => [probe.sessionKey, probe]));
     try {
       const activities = await provider.checkUpstreamActivity(probes);
       for (const activity of activities) {
         const probe = probeBySessionKey.get(activity.sessionKey);
-        if (
-          !probe ||
-          activity.humanTurns < 1 ||
-          !Number.isFinite(activity.occurredAt) ||
-          !activity.dedupeToken
-        ) {
+        if (!probe || !Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
           continue;
         }
-        if (isSelfEcho(probe, activity, options)) {
+        try {
+          // A run can start while the provider is scanning. Recheck ownership and
+          // provenance before any marker advance so its prompt remains deferred.
+          if (!(await probeProvenanceUnchanged(probe, options))) {
+            continue;
+          }
+        } catch (error) {
+          log.warn(
+            `upstream transcript provenance failed for ${probe.sessionKey}: ${String(error)}`,
+          );
+          continue;
+        }
+        if (activity.humanTurns === 0) {
           updateSessionUpstreamLinkMarker(probe.sessionKey, activity.nextMarker, {
             ...dbOptions,
             now: (options.now ?? Date.now)(),
           });
+          continue;
+        }
+        if (!Number.isFinite(activity.occurredAt) || !activity.dedupeToken) {
           continue;
         }
         const recorded = recordSessionHumanDirectMessage(
@@ -116,7 +177,7 @@ export async function runSessionUpstreamMonitorTick(
             actor: { actorType: "human" },
             channel: catalogId,
             dedupeKey: `upstream:${probe.sessionKey}:${activity.dedupeToken}`,
-            occurredAt: activity.occurredAt,
+            occurredAt: activity.occurredAt as number,
           },
           dbOptions,
         );
