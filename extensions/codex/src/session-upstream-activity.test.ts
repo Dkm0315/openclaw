@@ -14,7 +14,8 @@ function probe(overrides: Partial<SessionUpstreamProbe> = {}): SessionUpstreamPr
     hostId: "gateway:local",
     upstreamKind: "codex-app-server",
     upstreamRef: { connectionFingerprint: "connection-1", threadId: "thread-1" },
-    marker: { turnId: "turn-1" },
+    marker: { turnId: "turn-1", userMessageCount: 1 },
+    ownRecentUserTexts: [],
     ...overrides,
   };
 }
@@ -26,6 +27,7 @@ function turn(id: string, itemTypes: string[], startedAt: number): CodexTurn {
     items: itemTypes.map((type, index) => ({
       id: `${id}-item-${index}`,
       type,
+      text: type === "userMessage" ? `${id} prompt ${index}` : "",
     })) as CodexTurn["items"],
   };
 }
@@ -46,8 +48,8 @@ describe("Codex upstream activity", () => {
       sessionKey: "agent:main:adopted:codex",
       occurredAt: 300_000,
       humanTurns: 1,
-      nextMarker: { turnId: "turn-4" },
-      dedupeToken: "turn-4",
+      nextMarker: { turnId: "turn-4", userMessageCount: 0 },
+      dedupeToken: "turn-4:0",
     });
   });
 
@@ -63,12 +65,12 @@ describe("Codex upstream activity", () => {
 
     await expect(
       checkCodexUpstreamActivity([probe()], control, async () => "thread-canonical"),
-    ).resolves.toEqual([expect.objectContaining({ dedupeToken: "turn-2", humanTurns: 1 })]);
+    ).resolves.toEqual([expect.objectContaining({ dedupeToken: "turn-2:1", humanTurns: 1 })]);
     expect(listTurnPage).toHaveBeenCalledWith({
       threadId: "thread-canonical",
       limit: 100,
       sortDirection: "desc",
-      itemsView: "summary",
+      itemsView: "full",
     });
   });
 
@@ -91,5 +93,92 @@ describe("Codex upstream activity", () => {
         control,
       ),
     ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
+  });
+
+  it("detects a steer-appended user message on the marker turn", () => {
+    expect(
+      classifyCodexUpstreamTurns({
+        probe: probe({ marker: { turnId: "turn-1", userMessageCount: 1 } }),
+        turns: [turn("turn-1", ["userMessage", "agentMessage", "userMessage"], 100)],
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:adopted:codex",
+      occurredAt: 100_000,
+      humanTurns: 1,
+      nextMarker: { turnId: "turn-1", userMessageCount: 2 },
+      dedupeToken: "turn-1:2",
+    });
+  });
+
+  it("upgrades a legacy turn marker without reporting existing steers", () => {
+    expect(
+      classifyCodexUpstreamTurns({
+        probe: probe({ marker: { turnId: "turn-1" } }),
+        turns: [turn("turn-1", ["userMessage", "agentMessage", "userMessage"], 100)],
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:adopted:codex",
+      humanTurns: 0,
+      nextMarker: { turnId: "turn-1", userMessageCount: 2 },
+    });
+  });
+
+  it("filters OpenClaw-authored user items by normalized transcript text", () => {
+    expect(
+      classifyCodexUpstreamTurns({
+        probe: probe({
+          marker: { turnId: "turn-1", userMessageCount: 0 },
+          ownRecentUserTexts: ["same prompt"],
+        }),
+        turns: [
+          {
+            ...turn("turn-1", [], 100),
+            items: [
+              {
+                id: "user-1",
+                type: "userMessage",
+                text: "",
+                content: [{ type: "text", text: " same   prompt ", text_elements: [] }],
+              } as unknown as CodexTurn["items"][number],
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:adopted:codex",
+      humanTurns: 0,
+      nextMarker: { turnId: "turn-1", userMessageCount: 1 },
+    });
+  });
+
+  it("filters a batched OpenClaw steer by its component transcript texts", () => {
+    expect(
+      classifyCodexUpstreamTurns({
+        probe: probe({
+          marker: { turnId: "turn-1", userMessageCount: 0 },
+          ownRecentUserTexts: ["first steer", "second steer"],
+        }),
+        turns: [
+          {
+            ...turn("turn-1", [], 100),
+            items: [
+              {
+                id: "user-1",
+                type: "userMessage",
+                text: "",
+                content: [
+                  { type: "text", text: " first   steer ", text_elements: [] },
+                  { type: "text", text: "second steer", text_elements: [] },
+                ],
+              } as unknown as CodexTurn["items"][number],
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:adopted:codex",
+      humanTurns: 0,
+      nextMarker: { turnId: "turn-1", userMessageCount: 1 },
+    });
   });
 });

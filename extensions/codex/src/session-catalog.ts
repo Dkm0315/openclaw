@@ -57,6 +57,7 @@ import type {
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
+import { codexUpstreamBaseline, type CodexUpstreamBaseline } from "./session-upstream-marker.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -1235,21 +1236,10 @@ async function clearCreatedAdoptionBinding(params: {
 }
 
 function lastTerminalTurnId(thread: CodexThread): string | undefined {
-  for (let index = (thread.turns?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const turn = thread.turns?.[index];
-    const turnId = boundedCatalogString(turn?.id, MAX_SESSION_ID_LENGTH);
-    if (!turnId) {
-      continue;
-    }
-    if (
-      turn?.status === "completed" ||
-      turn?.status === "interrupted" ||
-      turn?.status === "failed"
-    ) {
-      return turnId;
-    }
-  }
-  return undefined;
+  return (
+    codexUpstreamBaseline(thread, (value) => boundedCatalogString(value, MAX_SESSION_ID_LENGTH))
+      .turnId ?? undefined
+  );
 }
 
 function matchesPendingAdoptionBinding(
@@ -1511,7 +1501,7 @@ async function continueLocalCodexSessionInner(params: {
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
   threadId: string;
-  onContinued?: (upstream: { connectionFingerprint: string; turnId: string | null }) => void;
+  onContinued?: (upstream: CodexUpstreamBaseline & { connectionFingerprint: string }) => void;
 }): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
   await requireCatalogEligibleThread(params.control, params.threadId);
   const existing = await findAdoptedSessionEntry({
@@ -1552,7 +1542,9 @@ async function continueLocalCodexSessionInner(params: {
     if (connectionFingerprint) {
       params.onContinued?.({
         connectionFingerprint,
-        turnId: lastTerminalTurnId(sourceThread) ?? null,
+        ...codexUpstreamBaseline(sourceThread, (value) =>
+          boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
+        ),
       });
     }
     return { sessionKey: existing.key, disposition: "existing" };
@@ -1578,7 +1570,9 @@ async function continueLocalCodexSessionInner(params: {
   });
   params.onContinued?.({
     connectionFingerprint,
-    turnId: lastTerminalTurnId(sourceThread) ?? null,
+    ...codexUpstreamBaseline(sourceThread, (value) =>
+      boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
+    ),
   });
   return { sessionKey: adopted.key, disposition: "forked" };
 }
@@ -1590,7 +1584,7 @@ async function continueLocalCodexSession(params: {
   config: OpenClawConfig;
   control: CodexSessionCatalogControl;
   threadId: string;
-  onContinued?: (upstream: { connectionFingerprint: string; turnId: string | null }) => void;
+  onContinued?: (upstream: CodexUpstreamBaseline & { connectionFingerprint: string }) => void;
 }): Promise<{ sessionKey: string; disposition: CodexSessionDisposition }> {
   const current = continueOperations.get(params.threadId);
   if (current) {
@@ -1774,7 +1768,7 @@ function registerCodexSessionCatalog(params: {
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
       }
-      let upstreamBaseline: { connectionFingerprint: string; turnId: string | null } | undefined;
+      let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
       const continued = await continueLocalCodexSession({
         api: params.api,
         bindingStore: params.bindingStore,
@@ -1795,7 +1789,10 @@ function registerCodexSessionCatalog(params: {
                   connectionFingerprint: upstreamBaseline.connectionFingerprint,
                   threadId: request.threadId,
                 },
-                marker: { turnId: upstreamBaseline.turnId },
+                marker: {
+                  turnId: upstreamBaseline.turnId,
+                  userMessageCount: upstreamBaseline.userMessageCount,
+                },
               },
             }
           : {}),

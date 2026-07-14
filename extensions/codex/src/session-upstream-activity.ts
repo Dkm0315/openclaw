@@ -10,6 +10,7 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
   CodexTurn,
+  CodexUserInput,
 } from "./app-server/protocol.js";
 import {
   sessionBindingIdentity,
@@ -25,13 +26,27 @@ type CodexUpstreamControl = {
   listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
 };
 
-function markerTurnId(probe: SessionUpstreamProbe): string | null | undefined {
+type CodexUpstreamMarker = {
+  turnId: string | null;
+  userMessageCount?: number;
+};
+
+function readMarker(probe: SessionUpstreamProbe): CodexUpstreamMarker | undefined {
   if (!isRecord(probe.marker)) {
     return undefined;
   }
-  return probe.marker.turnId === null || typeof probe.marker.turnId === "string"
-    ? probe.marker.turnId
-    : undefined;
+  const turnId = probe.marker.turnId;
+  if (turnId !== null && typeof turnId !== "string") {
+    return undefined;
+  }
+  const count = probe.marker.userMessageCount;
+  if (count !== undefined && (!Number.isSafeInteger(count) || (count as number) < 0)) {
+    return undefined;
+  }
+  return {
+    turnId,
+    ...(count === undefined ? {} : { userMessageCount: count as number }),
+  };
 }
 
 function upstreamConnectionFingerprint(probe: SessionUpstreamProbe): string | undefined {
@@ -45,39 +60,72 @@ export function classifyCodexUpstreamTurns(params: {
   turns: CodexTurn[];
   now?: number;
 }): SessionUpstreamActivity | undefined {
-  const marker = markerTurnId(params.probe);
-  if (marker === undefined || params.turns.length === 0) {
+  const marker = readMarker(params.probe);
+  const newest = params.turns[0];
+  if (!marker || !newest?.id) {
     return undefined;
   }
-  const markerIndex = marker === null ? -1 : params.turns.findIndex((turn) => turn.id === marker);
-  const newTurns = markerIndex < 0 ? params.turns : params.turns.slice(0, markerIndex);
-  if (newTurns.length === 0) {
+  const markerIndex =
+    marker.turnId === null ? -1 : params.turns.findIndex((turn) => turn.id === marker.turnId);
+  const candidateTurns = markerIndex < 0 ? params.turns : params.turns.slice(0, markerIndex + 1);
+  const newestUserMessageCount = countUserMessages(newest);
+  const markerAdvanced =
+    marker.turnId !== newest.id ||
+    marker.userMessageCount === undefined ||
+    newestUserMessageCount > marker.userMessageCount;
+  if (!markerAdvanced) {
     return undefined;
   }
-  const humanTurnEntries = newTurns.filter((turn) =>
-    turn.items.some((item) => item.type === "userMessage"),
-  );
-  if (humanTurnEntries.length === 0) {
-    return undefined;
+  const ownTexts = new Set(params.probe.ownRecentUserTexts);
+  let humanTurns = 0;
+  let occurredAt: number | undefined;
+  for (const turn of candidateTurns) {
+    const userMessages = turn.items.filter((item) => item.type === "userMessage");
+    const alreadySeen =
+      turn.id === marker.turnId ? (marker.userMessageCount ?? userMessages.length) : 0;
+    for (const item of userMessages.slice(alreadySeen)) {
+      const texts = normalizeUserMessageTexts(item);
+      if (
+        ownTexts.has(texts.join(" ")) ||
+        (texts.length > 1 && texts.every((text) => ownTexts.has(text)))
+      ) {
+        continue;
+      }
+      humanTurns += 1;
+      if (occurredAt === undefined) {
+        const timestampSeconds = turn.completedAt ?? turn.startedAt;
+        occurredAt =
+          typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)
+            ? timestampSeconds * 1000
+            : (params.now ?? Date.now());
+      }
+    }
   }
-  const newest = newTurns[0];
-  const newestHumanTurn = humanTurnEntries[0];
-  if (!newest?.id || !newestHumanTurn) {
-    return undefined;
-  }
-  const timestampSeconds = newestHumanTurn.completedAt ?? newestHumanTurn.startedAt;
-  const occurredAt =
-    typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)
-      ? timestampSeconds * 1000
-      : (params.now ?? Date.now());
-  const activityId = newest.id;
+  const activityId = `${newest.id}:${newestUserMessageCount}`;
   return {
     sessionKey: params.probe.sessionKey,
-    occurredAt,
-    humanTurns: humanTurnEntries.length,
-    nextMarker: { turnId: activityId },
-    dedupeToken: activityId,
+    humanTurns,
+    nextMarker: { turnId: newest.id, userMessageCount: newestUserMessageCount },
+    ...(humanTurns > 0
+      ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeToken: activityId }
+      : {}),
   };
+}
+
+function countUserMessages(turn: CodexTurn): number {
+  return turn.items.filter((item) => item.type === "userMessage").length;
+}
+
+function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
+  const typed = item as CodexTurn["items"][number] & {
+    content?: CodexUserInput[];
+    text?: string;
+  };
+  const contentTexts = typed.content
+    ?.filter((input): input is Extract<CodexUserInput, { type: "text" }> => input.type === "text")
+    .map((input) => input.text.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  return contentTexts?.length ? contentTexts : [(typed.text ?? "").trim().replace(/\s+/g, " ")];
 }
 
 export async function checkCodexUpstreamActivity(
@@ -102,7 +150,7 @@ export async function checkCodexUpstreamActivity(
           threadId: await resolveThreadId(probe),
           limit: CODEX_UPSTREAM_TURN_LIMIT,
           sortDirection: "desc",
-          itemsView: "summary",
+          itemsView: "full",
         });
         const activity = classifyCodexUpstreamTurns({ probe, turns: page.data });
         if (activity) {

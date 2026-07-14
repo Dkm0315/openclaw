@@ -1324,7 +1324,11 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl({ readThread: vi.fn(async () => sourceThread) });
-    const baselines: Array<{ connectionFingerprint: string; turnId: string | null }> = [];
+    const baselines: Array<{
+      connectionFingerprint: string;
+      turnId: string | null;
+      userMessageCount: number;
+    }> = [];
 
     const first = await continueLocalCodexSession({
       api,
@@ -1349,8 +1353,16 @@ describe("Codex supervision actions", () => {
     });
     expect(second).toEqual({ sessionKey: first.sessionKey, disposition: "existing" });
     expect(baselines).toEqual([
-      { connectionFingerprint: "catalog-connection", turnId: "turn-failed" },
-      { connectionFingerprint: "catalog-connection", turnId: "turn-failed" },
+      {
+        connectionFingerprint: "catalog-connection",
+        turnId: "turn-failed",
+        userMessageCount: 0,
+      },
+      {
+        connectionFingerprint: "catalog-connection",
+        turnId: "turn-failed",
+        userMessageCount: 0,
+      },
     ]);
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
