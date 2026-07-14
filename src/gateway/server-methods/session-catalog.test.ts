@@ -2,10 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
-const activeRegistry = vi.hoisted(() => ({ sessionCatalogs: [] as unknown[] }));
+const hoisted = vi.hoisted(() => ({
+  activeRegistry: { sessionCatalogs: [] as unknown[] },
+  recordSessionStateEvent: vi.fn(),
+  upsertSessionUpstreamLink: vi.fn(),
+}));
 
 vi.mock("../../plugins/runtime-state.js", () => ({
-  getPluginRegistryState: () => ({ activeRegistry }),
+  getPluginRegistryState: () => ({ activeRegistry: hoisted.activeRegistry }),
+}));
+
+vi.mock("../../sessions/session-state-events.js", () => ({
+  recordSessionStateEvent: hoisted.recordSessionStateEvent,
+}));
+
+vi.mock("../../sessions/session-upstream-links.js", () => ({
+  upsertSessionUpstreamLink: hoisted.upsertSessionUpstreamLink,
 }));
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
@@ -40,11 +52,13 @@ async function call(
 
 describe("session catalog Gateway methods", () => {
   beforeEach(() => {
-    activeRegistry.sessionCatalogs = [];
+    hoisted.activeRegistry.sessionCatalogs = [];
+    hoisted.recordSessionStateEvent.mockClear();
+    hoisted.upsertSessionUpstreamLink.mockClear();
   });
 
   it("sorts catalogs and isolates provider failures", async () => {
-    activeRegistry.sessionCatalogs = [
+    hoisted.activeRegistry.sessionCatalogs = [
       { provider: provider("zeta") },
       {
         provider: provider("alpha", {
@@ -72,7 +86,7 @@ describe("session catalog Gateway methods", () => {
       model: "anthropic/claude-opus-4-8",
       agentRuntime: "claude-cli",
     };
-    activeRegistry.sessionCatalogs = [
+    hoisted.activeRegistry.sessionCatalogs = [
       {
         pluginId: "anthropic",
         provider: provider("claude", {
@@ -112,7 +126,7 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("keeps creation available when catalog history listing fails", async () => {
-    activeRegistry.sessionCatalogs = [
+    hoisted.activeRegistry.sessionCatalogs = [
       {
         pluginId: "anthropic",
         provider: provider("claude", {
@@ -149,7 +163,7 @@ describe("session catalog Gateway methods", () => {
         ? { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" }
         : undefined,
     );
-    activeRegistry.sessionCatalogs = [
+    hoisted.activeRegistry.sessionCatalogs = [
       {
         pluginId: "anthropic",
         provider: provider("claude", { resolveCreateSession }),
@@ -179,7 +193,7 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("resolves the private runtime target separately from the public capability", () => {
-    activeRegistry.sessionCatalogs = [
+    hoisted.activeRegistry.sessionCatalogs = [
       {
         pluginId: "anthropic",
         provider: provider("claude", {
@@ -207,8 +221,15 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("dispatches continue by catalog id", async () => {
-    const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
-    activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
+    const continueSession = vi.fn(async () => ({
+      sessionKey: "agent:main:adopted",
+      upstream: {
+        kind: "codex-app-server" as const,
+        ref: { fingerprint: "connection-1", threadId: "thread-1" },
+        marker: { turnId: "turn-1" },
+      },
+    }));
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];
     const respond = await call("sessions.catalog.continue", {
       catalogId: "codex",
       hostId: "gateway:local",
@@ -219,6 +240,25 @@ describe("session catalog Gateway methods", () => {
       threadId: "thread-1",
     });
     expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+    expect(hoisted.upsertSessionUpstreamLink).toHaveBeenCalledWith({
+      sessionKey: "agent:main:adopted",
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      upstreamKind: "codex-app-server",
+      upstreamRef: { fingerprint: "connection-1", threadId: "thread-1" },
+      marker: { turnId: "turn-1" },
+    });
+    expect(hoisted.recordSessionStateEvent).toHaveBeenCalledWith({
+      sessionKey: "agent:main:adopted",
+      agentId: "main",
+      kind: "adopted",
+      actorType: "human",
+      summary: "adopted from codex",
+      payload: { catalogId: "codex", hostId: "gateway:local" },
+      dedupeKey: "adopted:agent:main:adopted",
+    });
   });
 
   it("rejects an unknown catalog id when listing", async () => {

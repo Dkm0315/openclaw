@@ -24,15 +24,14 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type { InputProvenance } from "./input-provenance.js";
+import {
+  NOTIFY_BY_SESSION_STATE_EVENT_KIND as NOTIFY_BY_KIND,
+  type SessionStateActorType,
+  type SessionStateEventKind,
+} from "./session-state-event-kinds.js";
+import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 
-export type SessionStateActorType = "human" | "agent" | "system";
-type SessionStateEventKind =
-  | "human_direct_message"
-  | "run_completed"
-  | "run_failed"
-  | "child_spawned"
-  | "goal_changed"
-  | "compacted";
+export type { SessionStateActorType } from "./session-state-event-kinds.js";
 
 type SessionStateEventInput = {
   sessionKey: string;
@@ -76,16 +75,6 @@ const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const log = createSubsystemLogger("sessions/state-events");
 let lastPruneAt = 0;
-
-// Future utility-model materiality belongs at this single deterministic seam; no config until then.
-const NOTIFY_BY_KIND: Record<SessionStateEventKind, boolean> = {
-  human_direct_message: true,
-  goal_changed: true,
-  run_completed: false,
-  run_failed: false,
-  child_spawned: false,
-  compacted: false,
-};
 
 function getSessionStateKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<SessionStateDatabase>(db);
@@ -628,6 +617,7 @@ export function handleSessionStateSessionDeleted(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
+  deleteSessionUpstreamLink(sessionKey, options);
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);
@@ -901,34 +891,43 @@ export function registerSessionStateWatch(
 }
 
 /** Record a direct human turn when the target has a parent or registered watcher. */
-export function recordSessionHumanDirectMessage(params: {
-  sessionKey: string;
-  entry?: SessionEntry;
-  agentId?: string;
-  actor: { actorType: SessionStateActorType; actorId?: string };
-  channel?: string;
-  runId?: string;
-}): void {
+export function recordSessionHumanDirectMessage(
+  params: {
+    sessionKey: string;
+    entry?: SessionEntry;
+    agentId?: string;
+    actor: { actorType: SessionStateActorType; actorId?: string };
+    channel?: string;
+    runId?: string;
+    dedupeKey?: string;
+    occurredAt?: number;
+  },
+  options: OpenClawStateDatabaseOptions = {},
+): SessionStateEventRecord | undefined {
   const watcherSessionKey = params.entry?.spawnedBy ?? params.entry?.parentSessionKey;
   if (params.actor.actorType !== "human") {
-    return;
+    return undefined;
   }
   // Unparented sessions record only when someone explicitly watches them: one
   // indexed existence probe keeps ordinary un-watched human turns write-free.
-  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey)) {
-    return;
+  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey, options)) {
+    return undefined;
   }
-  recordSessionStateEvent({
-    sessionKey: params.sessionKey,
-    sessionId: params.entry?.sessionId,
-    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-    kind: "human_direct_message",
-    actorType: "human",
-    ...(params.actor.actorId ? { actorId: params.actor.actorId } : {}),
-    runId: params.runId,
-    summary: `human message via ${params.channel?.trim() || "unknown"}`,
-    ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
-  });
+  return recordSessionStateEvent(
+    {
+      sessionKey: params.sessionKey,
+      sessionId: params.entry?.sessionId,
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+      kind: "human_direct_message",
+      actorType: "human",
+      ...(params.actor.actorId ? { actorId: params.actor.actorId } : {}),
+      runId: params.runId,
+      ...(params.dedupeKey ? { dedupeKey: params.dedupeKey } : {}),
+      summary: `human message via ${params.channel?.trim() || "unknown"}`,
+      ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
+    },
+    { ...options, ...(params.occurredAt === undefined ? {} : { now: params.occurredAt }) },
+  );
 }
 
 /** Seed the parent cursor at the child-spawn version. */

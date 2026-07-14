@@ -16,6 +16,43 @@ export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "
 export type SessionCatalogContinueProviderParams = Omit<SessionsCatalogContinueParams, "catalogId">;
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
+export type SessionUpstreamJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SessionUpstreamJsonValue[]
+  | { [key: string]: SessionUpstreamJsonValue };
+
+export type SessionUpstreamKind = "claude-cli" | "codex-app-server";
+
+export type SessionUpstreamProbe = {
+  sessionKey: string;
+  agentId: string;
+  threadId: string;
+  hostId: string;
+  upstreamKind: SessionUpstreamKind;
+  upstreamRef: SessionUpstreamJsonValue;
+  marker: SessionUpstreamJsonValue | null;
+};
+
+export type SessionUpstreamActivity = {
+  sessionKey: string;
+  occurredAt: number;
+  humanTurns: number;
+  nextMarker: SessionUpstreamJsonValue;
+  dedupeToken: string;
+};
+
+export type SessionCatalogContinueProviderResult = {
+  sessionKey: string;
+  upstream?: {
+    kind: SessionUpstreamKind;
+    ref: SessionUpstreamJsonValue;
+    marker: SessionUpstreamJsonValue;
+  };
+};
+
 export type SessionCatalogCreateTarget = {
   model: string;
   /** Concrete runtime pinned onto the created session so config reloads cannot retarget it. */
@@ -38,6 +75,7 @@ export type SessionCatalogProvider = {
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
-  ) => Promise<{ sessionKey: string }>;
+  ) => Promise<SessionCatalogContinueProviderResult>;
+  checkUpstreamActivity?: (probes: SessionUpstreamProbe[]) => Promise<SessionUpstreamActivity[]>;
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
 };

@@ -17,6 +17,9 @@ import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -226,7 +229,30 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     try {
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.continueSession(providerRequest));
+      const result = await provider.continueSession(providerRequest);
+      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
+      if (result.upstream) {
+        upsertSessionUpstreamLink({
+          sessionKey: result.sessionKey,
+          agentId,
+          catalogId: request.catalogId,
+          hostId: request.hostId,
+          threadId: request.threadId,
+          upstreamKind: result.upstream.kind,
+          upstreamRef: result.upstream.ref,
+          marker: result.upstream.marker,
+        });
+      }
+      recordSessionStateEvent({
+        sessionKey: result.sessionKey,
+        agentId,
+        kind: "adopted",
+        actorType: "human",
+        dedupeKey: `adopted:${result.sessionKey}`,
+        summary: `adopted from ${request.catalogId}`,
+        payload: { catalogId: request.catalogId, hostId: request.hostId },
+      });
+      respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);
       respond(
