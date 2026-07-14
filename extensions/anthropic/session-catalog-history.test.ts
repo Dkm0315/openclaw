@@ -38,9 +38,9 @@ describe("importClaudeHistory", () => {
     const userRow = appended.find((message) => message.role === "user");
     // mirrorOrigin keeps imported native prompts out of ownRecentUserTexts; without
     // it a repeated external prompt like "continue" is swallowed as self-echo.
-    expect(userRow?.__openclaw).toMatchObject({ mirrorOrigin: "claude-catalog-import" });
+    expect(userRow?.["__openclaw"]).toMatchObject({ mirrorOrigin: "claude-catalog-import" });
     const assistantRow = appended.find((message) => message.role === "assistant");
     expect(assistantRow).toBeDefined();
-    expect(assistantRow?.__openclaw).toBeUndefined();
+    expect(assistantRow?.["__openclaw"]).toBeUndefined();
   });
 });
