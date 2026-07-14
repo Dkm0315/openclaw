@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
+import {
+  isGitPackageInstallSpec,
+  npmGitPackSourceAccessArgs,
+} from "./package-manager-install-policy.js";
 import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -22,6 +26,7 @@ import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
   resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallPreflightError,
   resolveGlobalInstallTarget,
   type CommandRunner,
   type NpmGlobalPrefixLayout,
@@ -187,53 +192,6 @@ function resolveStagedNpmTargetLayout(
   return null;
 }
 
-function stripPackageAlias(spec: string, packageName: string): string {
-  const trimmed = spec.trim();
-  const prefix = `${packageName.trim()}@`;
-  return trimmed.toLowerCase().startsWith(prefix.toLowerCase())
-    ? trimmed.slice(prefix.length).trim()
-    : trimmed;
-}
-
-function isHttpGitUrlSpec(spec: string): boolean {
-  try {
-    const url = new URL(spec);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "");
-    if (pathname.endsWith(".git")) {
-      return true;
-    }
-    const parts = pathname.split("/").filter(Boolean);
-    return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
-  } catch {
-    return false;
-  }
-}
-
-function isGitHubShorthandSpec(spec: string): boolean {
-  const [repo] = spec.split("#", 1);
-  if (!repo || repo.startsWith(".") || repo.startsWith("/") || repo.startsWith("@")) {
-    return false;
-  }
-  const parts = repo.split("/");
-  return parts.length === 2 && parts.every((part) => /^[^\s/:@]+$/u.test(part));
-}
-
-function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
-  const target = stripPackageAlias(spec, packageName);
-  return (
-    /^github:/i.test(target) ||
-    /^git\+(?:ssh|https|http|file):/i.test(target) ||
-    /^git:/i.test(target) ||
-    /^ssh:\/\//i.test(target) ||
-    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
-    isHttpGitUrlSpec(target) ||
-    isGitHubShorthandSpec(target)
-  );
-}
-
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
@@ -284,7 +242,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
 }> {
   if (
     params.installTarget.manager !== "npm" ||
-    !isNpmGitSourceInstallSpec(params.installSpec, params.packageName)
+    !isGitPackageInstallSpec(params.packageName, params.installSpec)
   ) {
     return { installSpec: params.installSpec, packDir: null, steps: [], failedStep: null };
   }
@@ -296,6 +254,7 @@ async function prepareNpmGitSourceInstallSpec(params: {
       params.installTarget.command,
       "pack",
       params.installSpec,
+      ...npmGitPackSourceAccessArgs(params.packageName, params.installSpec),
       "--pack-destination",
       packDir,
       ...NPM_PACK_QUIET_FLAGS,
@@ -581,6 +540,25 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
+    const preflightError = resolveGlobalInstallPreflightError(params.installTarget);
+    if (preflightError) {
+      const failedStep: PackageUpdateStepResult = {
+        name: "global update preflight",
+        command: `${params.installTarget.command} --version`,
+        cwd: params.installCwd ?? params.installTarget.globalRoot ?? process.cwd(),
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: preflightError,
+      };
+      return {
+        steps: [failedStep],
+        verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
+        afterVersion: null,
+        failedStep,
+      };
+    }
+
     const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
     stagedInstall = preparedInstall.stagedInstall;
     if (preparedInstall.failedStep) {

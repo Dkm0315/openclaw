@@ -13,8 +13,8 @@ import {
 } from "./lib/npm-publish-plan.mjs";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  writePackageDistInventory,
+  PACKAGE_INSTALL_REQUIRED_PATHS,
+  writePackageDistInventoryForPublish,
 } from "./lib/package-dist-inventory.ts";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -67,7 +67,7 @@ const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
   "npm-shrinkwrap.json",
-  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  ...PACKAGE_INSTALL_REQUIRED_PATHS,
   "dist/control-ui/index.html",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
@@ -768,7 +768,7 @@ async function main(): Promise<number> {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
   });
   if (!skipPackValidation) {
-    await writePackageDistInventory(process.cwd());
+    await writePackageDistInventoryForPublish(process.cwd());
   }
   const shrinkwrapErrors = skipPackValidation ? [] : collectNpmShrinkwrapErrors();
   const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();

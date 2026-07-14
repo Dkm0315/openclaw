@@ -21,6 +21,17 @@ export function enforceSupportedNodeRuntime(
   },
   reportError?: (...data: unknown[]) => void,
 ): boolean;
+export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH: string;
+/**
+ * Removes the packed marker only after the runtime check succeeds.
+ */
+export function completePackageInstallGuard(
+  options?: {
+    markerUrl?: URL;
+    remove?: (path: URL, options: { force: boolean }) => void;
+  },
+  reportError?: (...data: unknown[]) => void,
+): boolean;
 /**
  * Detects the package manager running the current lifecycle script.
  */

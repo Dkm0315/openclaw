@@ -1,5 +1,5 @@
 // Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -9,6 +9,7 @@ const lifecyclePackageManagerLauncherAliases = new Map([
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
 const NODE_VERSION_RE = /(\d+)\.(\d+)\.(\d+)/u;
+export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 
 function normalizeEnvValue(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -118,6 +119,29 @@ export function enforceSupportedNodeRuntime(
   return false;
 }
 
+/**
+ * Removes the packed marker only after the runtime check succeeds.
+ */
+export function completePackageInstallGuard(
+  {
+    markerUrl = new URL(`../${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`, import.meta.url),
+    remove = rmSync,
+  } = {},
+  reportError = console.error,
+) {
+  try {
+    remove(markerUrl, { force: true });
+    return true;
+  } catch (error) {
+    reportError(
+      `[openclaw] error: could not complete package preinstall: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return false;
+  }
+}
+
 function normalizeLifecyclePackageManagerName(value) {
   const normalized = normalizeEnvValue(value).toLowerCase();
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(normalized)) {
@@ -192,7 +216,7 @@ export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  if (enforceSupportedNodeRuntime()) {
+  if (enforceSupportedNodeRuntime() && completePackageInstallGuard()) {
     warnIfNonPnpmLifecycle();
   } else {
     process.exitCode = 1;

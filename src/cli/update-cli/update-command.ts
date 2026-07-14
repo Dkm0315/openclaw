@@ -55,6 +55,7 @@ import {
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  resolveGlobalInstallPreflightError,
   resolvePnpmGlobalDirFromGlobalRoot,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
@@ -473,14 +474,25 @@ async function runGitUpdate(params: {
       installTarget.manager === "pnpm"
         ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
         : null;
-    const installStep = await runUpdateStep({
-      name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
-      cwd: updateRoot,
-      env: installEnv,
-      timeoutMs: effectiveTimeout,
-      progress: params.progress,
-    });
+    const installPreflightError = resolveGlobalInstallPreflightError(installTarget);
+    const installStep = installPreflightError
+      ? {
+          name: "global install preflight",
+          command: `${installTarget.command} --version`,
+          cwd: updateRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stdoutTail: null,
+          stderrTail: installPreflightError,
+        }
+      : await runUpdateStep({
+          name: "global install",
+          argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
+          cwd: updateRoot,
+          env: installEnv,
+          timeoutMs: effectiveTimeout,
+          progress: params.progress,
+        });
     steps.push(installStep);
 
     const failedStep = installStep.exitCode !== 0 ? installStep : null;

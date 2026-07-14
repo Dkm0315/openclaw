@@ -17,6 +17,15 @@ import {
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
+import {
+  detectPnpmVersion,
+  isExplicitPackageInstallSpec,
+  npmInstallScriptAllowlistFlag,
+  npmSourceAccessArgs,
+  pnpmInstallScriptPreflightError,
+  type PnpmVersion,
+  shouldPassPnpmAllowBuild,
+} from "./package-manager-install-policy.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 
@@ -39,6 +48,7 @@ export type CommandRunner = (
 type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
+  pnpmVersion?: PnpmVersion | null;
 };
 
 /**
@@ -51,6 +61,13 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   directNodeModulesRoot?: boolean;
 };
 
+/** Returns an actionable error when a package manager cannot safely run install scripts. */
+export function resolveGlobalInstallPreflightError(
+  target: ResolvedGlobalInstallTarget,
+): string | null {
+  return target.manager === "pnpm" ? pnpmInstallScriptPreflightError(target.pnpmVersion) : null;
+}
+
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
@@ -59,6 +76,7 @@ const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
+const PNPM_DISABLE_ALLOW_ALL_BUILDS_FLAG = "--config.dangerously-allow-all-builds=false";
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
@@ -88,40 +106,6 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
 /** Returns true when a user target requests the moving main-branch package spec. */
 function isMainPackageTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(normalizePackageTarget(value)) === "main";
-}
-
-/**
- * Returns true for targets that should pass through as package-manager specs
- * rather than being treated as registry dist-tags.
- */
-function isExplicitPackageInstallSpec(value: string): boolean {
-  const trimmed = normalizePackageTarget(value);
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    /\.(?:tgz|tar\.gz)$/iu.test(trimmed) ||
-    trimmed.includes("://") ||
-    trimmed.includes("#") ||
-    /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
-  );
-}
-
-function stripPrimaryPackageAlias(spec: string): string {
-  const normalized = normalizePackageTarget(spec);
-  const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.toLowerCase().startsWith(prefix)
-    ? normalized.slice(prefix.length).trim()
-    : normalized;
-}
-
-function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {
-  const target = stripPrimaryPackageAlias(spec);
-  return (
-    /^github:/i.test(target) ||
-    /^git\+(?:ssh|https|http|file):/i.test(target) ||
-    /^git:/i.test(target)
-  );
 }
 
 /**
@@ -793,6 +777,10 @@ export async function resolveGlobalInstallTarget(params: {
     params.timeoutMs,
     params.pkgRoot,
   );
+  const pnpmVersion =
+    command.manager === "pnpm"
+      ? await detectPnpmVersion(command.command, params.runCommand, params.timeoutMs)
+      : undefined;
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
   // The detected npm owner applies to the running package, so its prefix is
   // authoritative. PATH's npm may belong to another Node installation and
@@ -809,6 +797,7 @@ export async function resolveGlobalInstallTarget(params: {
     globalRoot;
   return {
     ...command,
+    ...(pnpmVersion === undefined ? {} : { pnpmVersion }),
     globalRoot: targetGlobalRoot,
     packageRoot: targetGlobalRoot
       ? resolvePackageRootFromGlobalRoot({
@@ -914,7 +903,7 @@ export async function detectGlobalInstallManagerByPresence(
 
 /**
  * Builds the primary package-manager argv for a global OpenClaw install.
- * npm receives quiet/freshness-bypass flags; pnpm source installs allow builds.
+ * Package managers explicitly allow OpenClaw lifecycle scripts; npm also gets quiet/freshness flags.
  */
 export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
@@ -924,23 +913,28 @@ export function globalInstallArgs(
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
+    const allowBuild = shouldPassPnpmAllowBuild(PRIMARY_PACKAGE_NAME, spec, resolved.pnpmVersion);
     return [
       resolved.command,
       "add",
       "-g",
       ...(installPrefix ? ["--global-dir", installPrefix] : []),
-      ...(isPnpmOpenClawSourceInstallSpec(spec) ? [PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG] : []),
+      ...(allowBuild
+        ? [PNPM_DISABLE_ALLOW_ALL_BUILDS_FLAG, PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG]
+        : []),
       spec,
     ];
   }
   if (resolved.manager === "bun") {
-    return [resolved.command, "add", "-g", spec];
+    return [resolved.command, "add", "-g", "--trust", spec];
   }
   return [
     resolved.command,
     "i",
     "-g",
     ...(installPrefix ? ["--prefix", installPrefix] : []),
+    ...npmSourceAccessArgs(PRIMARY_PACKAGE_NAME, spec),
+    npmInstallScriptAllowlistFlag(PRIMARY_PACKAGE_NAME, spec),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
     ...createNpmFreshnessBypassArgs(process.env, new Date(), {
@@ -968,6 +962,8 @@ export function globalInstallFallbackArgs(
     "i",
     "-g",
     ...(installPrefix ? ["--prefix", installPrefix] : []),
+    ...npmSourceAccessArgs(PRIMARY_PACKAGE_NAME, spec),
+    npmInstallScriptAllowlistFlag(PRIMARY_PACKAGE_NAME, spec),
     spec,
     "--omit=optional",
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,

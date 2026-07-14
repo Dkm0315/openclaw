@@ -567,7 +567,7 @@ describe("update-cli", () => {
       isHttpGitUrl = false;
     }
     return (
-      /^github:/i.test(target) ||
+      /^(?:bitbucket|gist|github|gitlab):/i.test(target) ||
       /^git(?:\+|:)/i.test(target) ||
       /^ssh:\/\//i.test(target) ||
       /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
@@ -692,12 +692,13 @@ describe("update-cli", () => {
         "npm",
         "pack",
         spec,
+        "--allow-git=all",
         "--pack-destination",
         expect.any(String),
         "--json",
         "--loglevel=error",
       ]);
-      const packDir = packCall?.[0][4];
+      const packDir = packCall?.[0][5];
       if (!packDir) {
         throw new Error("Expected package pack directory");
       }
@@ -706,10 +707,16 @@ describe("update-cli", () => {
       expect(packagePackCommandCall()).toBeUndefined();
     }
     const call = packageInstallCommandCall();
+    const allowScripts = installSpec.startsWith("openclaw@")
+      ? "--allow-scripts=openclaw"
+      : `--allow-scripts=openclaw,${installSpec}`;
+    const sourceAccess = /^https?:\/\//iu.test(installSpec) ? ["--allow-remote=root"] : [];
     expect(call?.[0]).toEqual([
       "npm",
       "i",
       "-g",
+      ...sourceAccess,
+      allowScripts,
       installSpec,
       "--no-fund",
       "--no-audit",
@@ -4591,6 +4598,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--no-fund",
         "--no-audit",
@@ -4601,6 +4609,7 @@ describe("update-cli", () => {
         "npm",
         "i",
         "-g",
+        "--allow-scripts=openclaw",
         "openclaw@latest",
         "--omit=optional",
         "--no-fund",

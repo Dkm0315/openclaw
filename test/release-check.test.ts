@@ -8,6 +8,7 @@ import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-bu
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 } from "../scripts/lib/package-dist-inventory.ts";
 import {
   listPluginSdkDistArtifacts,
@@ -697,6 +698,7 @@ describe("collectMissingPackPaths", () => {
     for (const path of [
       "dist/channel-catalog.json",
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
       "dist/control-ui/index.html",
       "scripts/npm-runner.mjs",
       "scripts/prepare-git-hooks.mjs",
@@ -749,6 +751,7 @@ describe("collectMissingPackPaths", () => {
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+        PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
       ]),
     ).toStrictEqual([]);
   });

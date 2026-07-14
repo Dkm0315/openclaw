@@ -1,10 +1,13 @@
 // Preinstall tests cover package runtime enforcement and package manager warnings.
 import { describe, expect, it, vi } from "vitest";
+import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
 import {
+  completePackageInstallGuard,
   createPackageManagerWarningMessage,
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
   nodeVersionSatisfiesPackageEngine,
+  PACKAGE_INSTALL_GUARD_RELATIVE_PATH as PREINSTALL_GUARD_RELATIVE_PATH,
   readPackageNodeEngine,
   warnIfNonPnpmLifecycle,
 } from "../../scripts/preinstall-package-manager-warning.mjs";
@@ -23,6 +26,10 @@ function requireFirstWarning(warn: ReturnType<typeof vi.fn>): unknown {
 }
 
 describe("install runtime enforcement", () => {
+  it("shares the packaged install guard path", () => {
+    expect(PREINSTALL_GUARD_RELATIVE_PATH).toBe(PACKAGE_INSTALL_GUARD_RELATIVE_PATH);
+  });
+
   it("reads the canonical package engine range", () => {
     expect(readPackageNodeEngine()).toBe(SUPPORTED_NODE_RANGE);
   });
@@ -83,6 +90,33 @@ describe("install runtime enforcement", () => {
       ),
     ).toBe(true);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("removes the install guard after runtime validation", () => {
+    const markerUrl = new URL("file:///tmp/openclaw-install-guard");
+    const remove = vi.fn();
+    const reportError = vi.fn();
+
+    expect(completePackageInstallGuard({ markerUrl, remove }, reportError)).toBe(true);
+    expect(remove).toHaveBeenCalledWith(markerUrl, { force: true });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("fails installation when the install guard cannot be removed", () => {
+    const reportError = vi.fn();
+    expect(
+      completePackageInstallGuard(
+        {
+          remove: () => {
+            throw new Error("read-only package");
+          },
+        },
+        reportError,
+      ),
+    ).toBe(false);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.stringContaining("could not complete package preinstall: read-only package"),
+    );
   });
 });
 

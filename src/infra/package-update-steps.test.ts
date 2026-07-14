@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { readPackageVersion } from "./package-json.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -58,6 +59,7 @@ function createPnpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   return {
     manager: "pnpm",
     command: "pnpm",
+    pnpmVersion: { major: 11, minor: 0, patch: 0 },
     globalRoot,
     packageRoot: path.join(globalRoot, "openclaw"),
   };
@@ -408,12 +410,13 @@ describe("runGlobalPackageUpdateSteps", () => {
             "npm",
             "pack",
             sourceSpec,
+            "--allow-git=all",
             "--pack-destination",
             expect.any(String),
             "--json",
             "--loglevel=error",
           ]);
-          const destination = argv[4];
+          const destination = argv[argv.indexOf("--pack-destination") + 1];
           if (!destination) {
             throw new Error("missing pack destination");
           }
@@ -441,6 +444,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "-g",
           "--prefix",
           stagePrefix,
+          `--allow-scripts=openclaw,${path.join(packDir, "openclaw-2.0.0.tgz")}`,
           path.join(packDir, "openclaw-2.0.0.tgz"),
           "--no-fund",
           "--no-audit",
@@ -507,6 +511,18 @@ describe("runGlobalPackageUpdateSteps", () => {
       name: "SCP-style SSH",
       sourceSpec: "git@github.com:openclaw/openclaw.git#main",
     },
+    {
+      name: "GitLab shortcut",
+      sourceSpec: "gitlab:openclaw/openclaw#main",
+    },
+    {
+      name: "Bitbucket shortcut",
+      sourceSpec: "bitbucket:openclaw/openclaw#main",
+    },
+    {
+      name: "gist shortcut",
+      sourceSpec: "gist:11081aaa281#main",
+    },
   ] as const)(
     "packs additional npm git source spec forms before install: $name",
     async ({ sourceSpec }) => {
@@ -522,7 +538,12 @@ describe("runGlobalPackageUpdateSteps", () => {
             if (!destination) {
               throw new Error("missing pack destination");
             }
-            expect(argv.slice(0, 3)).toEqual(["npm", "pack", sourceSpec]);
+            expect(argv.slice(0, 4)).toEqual([
+              "npm",
+              "pack",
+              sourceSpec,
+              "--allow-git=all",
+            ]);
             tarball = path.join(destination, "openclaw-2.0.0.tgz");
             await fs.writeFile(tarball, "packed\n", "utf8");
             return {
@@ -704,7 +725,16 @@ describe("runGlobalPackageUpdateSteps", () => {
           if (name !== "global update") {
             throw new Error(`unexpected step ${name}`);
           }
-          expect(argv).toEqual(["pnpm", "add", "-g", "--global-dir", globalDir, "openclaw@2.0.0"]);
+          expect(argv).toEqual([
+            "pnpm",
+            "add",
+            "-g",
+            "--global-dir",
+            globalDir,
+            "--config.dangerously-allow-all-builds=false",
+            "--allow-build=openclaw",
+            "openclaw@2.0.0",
+          ]);
           await writePackageRoot(packageRoot, "2.0.0");
           return {
             name,
@@ -732,6 +762,34 @@ describe("runGlobalPackageUpdateSteps", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("rejects pnpm 10.0-10.3 before staging an update", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-old-pnpm-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm", "global", "5", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      const installTarget = {
+        ...createPnpmTarget(globalRoot),
+        pnpmVersion: { major: 10, minor: 3, patch: 0 },
+      };
+      const runStep = vi.fn();
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget,
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(runStep).not.toHaveBeenCalled();
+      expect(result.failedStep?.name).toBe("global update preflight");
+      expect(result.failedStep?.stderrTail).toContain("upgrade pnpm to 10.4.0 or newer");
+      await expect(readPackageVersion(packageRoot)).resolves.toBe("1.0.0");
+    });
   });
 
   it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {
