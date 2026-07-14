@@ -224,7 +224,7 @@ export function deleteSessionUpstreamLink(
 export function listWatchedSessionUpstreamLinks(
   options: OpenClawStateDatabaseOptions = {},
 ): Map<string, SessionUpstreamLink[]> {
-  const grouped: SessionUpstreamLinksByCatalog = new Map();
+  const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
     const { db } = openOpenClawStateDatabase(options);
     // Watch cursors own demand. Unwatched adopted sessions stay out of the polling hot path.

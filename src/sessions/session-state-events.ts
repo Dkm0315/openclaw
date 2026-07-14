@@ -23,11 +23,7 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
-import {
-  enqueueSessionStateNotice,
-  isNotifiableWatcherKey,
-  SESSION_STATE_CONTEXT_PREFIX,
-} from "./session-state-notices.js";
+import { enqueueSessionStateNotice, isNotifiableWatcherKey } from "./session-state-notices.js";
 import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 
 export type { SessionStateActorType } from "./session-state-event-kinds.js";
