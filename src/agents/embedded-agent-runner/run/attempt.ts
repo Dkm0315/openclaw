@@ -386,12 +386,8 @@ export async function runEmbeddedAttempt(
         sessionLockController,
         withOwnedSessionWriteLock,
       });
-      const {
-        getLatestUserMessageContext,
-        isOpenAIResponsesApi,
-        preparedUserTurnMessage,
-        transcriptPolicy,
-      } = preparedSessionManager;
+      const { isOpenAIResponsesApi, preparedUserTurnMessage, transcriptPolicy } =
+        preparedSessionManager;
       sessionManager = preparedSessionManager.sessionManager;
 
       const {
@@ -445,7 +441,7 @@ export async function runEmbeddedAttempt(
       const sessionBoundary = prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: params,
-        getCurrentUserTranscriptContext: getLatestUserMessageContext,
+        getCurrentUserTranscriptContext: preparedSessionManager.getLatestUserMessageContext,
         isRawModelRun,
         preparedUserTurnMessage,
         sessionManager,
