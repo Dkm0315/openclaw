@@ -173,12 +173,12 @@ export async function runSessionUpstreamMonitorTick(
         // From here to the record the path is synchronous, so a stale scan can
         // neither record from the old source nor clobber the refreshed marker.
         const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
-        const currentLink = readSessionUpstreamLink(probe.sessionKey, dbOptions);
+        const currentLink = readSessionUpstreamLink(probe.sessionKey, probe.agentId, dbOptions);
         if (!currentLink || currentLink.updatedAt !== expectedUpdatedAt) {
           continue;
         }
         if (activity.humanTurns === 0) {
-          updateSessionUpstreamLinkMarker(probe.sessionKey, activity.nextMarker, {
+          updateSessionUpstreamLinkMarker(probe.sessionKey, probe.agentId, activity.nextMarker, {
             ...dbOptions,
             now: (options.now ?? Date.now)(),
             ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
@@ -206,7 +206,7 @@ export async function runSessionUpstreamMonitorTick(
           continue;
         }
         // Commit the scan marker only after the durable event insert/dedupe succeeds.
-        updateSessionUpstreamLinkMarker(probe.sessionKey, activity.nextMarker, {
+        updateSessionUpstreamLinkMarker(probe.sessionKey, probe.agentId, activity.nextMarker, {
           ...dbOptions,
           now: (options.now ?? Date.now)(),
           ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),

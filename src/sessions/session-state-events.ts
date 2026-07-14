@@ -631,7 +631,7 @@ export function handleSessionStateSessionDeleted(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  deleteSessionUpstreamLink(sessionKey, options);
+  deleteSessionUpstreamLink(sessionKey, agentId, options);
   try {
     runOpenClawStateWriteTransaction(({ db }) => {
       const kysely = getSessionStateKysely(db);

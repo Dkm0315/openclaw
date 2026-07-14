@@ -73,12 +73,12 @@ describe("session upstream links", () => {
       ],
     ]);
 
-    updateSessionUpstreamLinkMarker(watched, { offset: 9 }, { ...database, now: 200 });
+    updateSessionUpstreamLinkMarker(watched, "main", { offset: 9 }, { ...database, now: 200 });
     expect(listWatchedSessionUpstreamLinks(database).get("claude")?.[0]).toEqual(
       expect.objectContaining({ marker: { offset: 9 }, lastScannedAt: 200, updatedAt: 200 }),
     );
 
-    deleteSessionUpstreamLink(watched, database);
+    deleteSessionUpstreamLink(watched, "main", database);
     expect([...listWatchedSessionUpstreamLinks(database)]).toEqual([]);
   });
 
@@ -90,7 +90,7 @@ describe("session upstream links", () => {
       { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
       database,
     );
-    updateSessionUpstreamLinkMarker(sessionKey, { offset: 4 }, database);
+    updateSessionUpstreamLinkMarker(sessionKey, "main", { offset: 4 }, database);
 
     // Same source (thread/host/kind unchanged): scan progress must survive.
     upsertSessionUpstreamLink(
@@ -101,14 +101,14 @@ describe("session upstream links", () => {
         hostId: "gateway:local",
         threadId: `thread-${sessionKey}`,
         upstreamKind: "claude-cli",
-        upstreamRef: { source: "refreshed" },
+        upstreamRef: { source: sessionKey },
         marker: { offset: 99 },
       },
       database,
     );
     expect(listWatchedSessionUpstreamLinks(database).get("claude")?.[0]).toEqual(
       expect.objectContaining({
-        upstreamRef: { source: "refreshed" },
+        upstreamRef: { source: sessionKey },
         marker: { offset: 4 },
       }),
     );

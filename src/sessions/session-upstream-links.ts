@@ -103,14 +103,20 @@ export function upsertSessionUpstreamLink(
             updated_at: now,
           })
           .onConflict((conflict) =>
-            conflict.column("session_key").doUpdateSet((eb) => {
-              // Same-source refresh preserves scan progress; a source change
-              // (thread/host/kind) must rebase the cursor to the new baseline or
-              // the old source's marker would misread the new upstream.
+            conflict.columns(["session_key", "agent_id"]).doUpdateSet((eb) => {
+              // Same-source refresh preserves scan progress; any identity change
+              // (thread/host/kind or the physical ref: Claude filePath, Codex
+              // connection fingerprint) must rebase the cursor to the new baseline
+              // or the old source's marker would misread the new upstream.
               const sourceChanged = eb.or([
                 eb("session_upstream_links.thread_id", "!=", eb.ref("excluded.thread_id")),
                 eb("session_upstream_links.host_id", "!=", eb.ref("excluded.host_id")),
                 eb("session_upstream_links.upstream_kind", "!=", eb.ref("excluded.upstream_kind")),
+                eb(
+                  "session_upstream_links.upstream_ref_json",
+                  "!=",
+                  eb.ref("excluded.upstream_ref_json"),
+                ),
               ]);
               return {
                 agent_id: input.agentId,
@@ -144,6 +150,7 @@ export function upsertSessionUpstreamLink(
 
 export function readSessionUpstreamLink(
   sessionKey: string,
+  agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): SessionUpstreamLink | undefined {
   try {
@@ -153,7 +160,8 @@ export function readSessionUpstreamLink(
       getSessionUpstreamKysely(db)
         .selectFrom("session_upstream_links")
         .selectAll()
-        .where("session_key", "=", sessionKey),
+        .where("session_key", "=", sessionKey)
+        .where("agent_id", "=", agentId),
     ).rows[0];
     return row ? rowToSessionUpstreamLink(row) : undefined;
   } catch (error) {
@@ -164,6 +172,7 @@ export function readSessionUpstreamLink(
 
 export function updateSessionUpstreamLinkMarker(
   sessionKey: string,
+  agentId: string,
   marker: SessionUpstreamJsonValue,
   options: OpenClawStateDatabaseOptions & { now?: number; expectedUpdatedAt?: number } = {},
 ): boolean {
@@ -178,7 +187,8 @@ export function updateSessionUpstreamLinkMarker(
           last_scanned_at: now,
           updated_at: now,
         })
-        .where("session_key", "=", sessionKey);
+        .where("session_key", "=", sessionKey)
+        .where("agent_id", "=", agentId);
       if (options.expectedUpdatedAt !== undefined) {
         // CAS: a Continue can refresh the link mid-scan; a stale scan must not
         // clobber the refreshed source's marker with the old source's cursor.
@@ -195,6 +205,7 @@ export function updateSessionUpstreamLinkMarker(
 
 export function deleteSessionUpstreamLink(
   sessionKey: string,
+  agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   try {
@@ -203,7 +214,8 @@ export function deleteSessionUpstreamLink(
         db,
         getSessionUpstreamKysely(db)
           .deleteFrom("session_upstream_links")
-          .where("session_key", "=", sessionKey),
+          .where("session_key", "=", sessionKey)
+          .where("agent_id", "=", agentId),
       );
     }, options);
   } catch (error) {
