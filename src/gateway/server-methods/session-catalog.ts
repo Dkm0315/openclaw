@@ -232,6 +232,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       const result = await provider.continueSession(providerRequest);
       const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
       if (result.upstream) {
+        // Links exist only for adoptions made on this version: pre-upgrade adopted
+        // sessions are transient linkage with no shipped contract, and re-continuing
+        // from the catalog establishes the link. No doctor backfill by design.
         upsertSessionUpstreamLink({
           sessionKey: result.sessionKey,
           agentId,

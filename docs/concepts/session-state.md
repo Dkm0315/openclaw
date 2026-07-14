@@ -104,6 +104,7 @@ Current limits:
 - A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
 - Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
 - Catalog sessions that have not been adopted remain outside the awareness layer in v1.
+- Sessions adopted before this feature carry no upstream link; continue them from the catalog once to start upstream monitoring.
 
 ## Related
 
