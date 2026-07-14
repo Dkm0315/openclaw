@@ -5,17 +5,17 @@ export type CodexUpstreamBaseline = {
   userMessageCount: number;
 };
 
-function lastTerminalTurn(
+// Baseline must include an ACTIVE adoption-time turn: its already-present user
+// items are history, and skipping back to the last terminal turn would replay
+// them as external activity once that turn completes.
+function lastIdentifiableTurn(
   thread: CodexThread,
   normalizeTurnId: (value: unknown) => string | undefined,
 ): CodexTurn | undefined {
   for (let index = (thread.turns?.length ?? 0) - 1; index >= 0; index -= 1) {
     const turn = thread.turns?.[index];
     const turnId = normalizeTurnId(turn?.id);
-    if (!turn || !turnId) {
-      continue;
-    }
-    if (turn.status === "completed" || turn.status === "interrupted" || turn.status === "failed") {
+    if (turn && turnId) {
       return { ...turn, id: turnId };
     }
   }
@@ -26,9 +26,28 @@ export function codexUpstreamBaseline(
   thread: CodexThread,
   normalizeTurnId: (value: unknown) => string | undefined,
 ): CodexUpstreamBaseline {
-  const turn = lastTerminalTurn(thread, normalizeTurnId);
+  const turn = lastIdentifiableTurn(thread, normalizeTurnId);
   return {
     turnId: turn?.id ?? null,
     userMessageCount: turn?.items.filter((item) => item.type === "userMessage").length ?? 0,
   };
+}
+
+// History import stops at the last terminal turn: mirroring a half-finished
+// active turn would freeze partial content behind the covered-through id.
+export function codexLastTerminalTurnId(
+  thread: CodexThread,
+  normalizeTurnId: (value: unknown) => string | undefined,
+): string | undefined {
+  for (let index = (thread.turns?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const turn = thread.turns?.[index];
+    const turnId = normalizeTurnId(turn?.id);
+    if (!turn || !turnId) {
+      continue;
+    }
+    if (turn.status === "completed" || turn.status === "interrupted" || turn.status === "failed") {
+      return turnId;
+    }
+  }
+  return undefined;
 }

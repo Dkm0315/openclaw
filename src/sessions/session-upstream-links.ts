@@ -103,14 +103,36 @@ export function upsertSessionUpstreamLink(
             updated_at: now,
           })
           .onConflict((conflict) =>
-            conflict.column("session_key").doUpdateSet({
-              agent_id: input.agentId,
-              catalog_id: input.catalogId,
-              host_id: input.hostId,
-              thread_id: input.threadId,
-              upstream_kind: input.upstreamKind,
-              upstream_ref_json: JSON.stringify(input.upstreamRef),
-              updated_at: now,
+            conflict.column("session_key").doUpdateSet((eb) => {
+              // Same-source refresh preserves scan progress; a source change
+              // (thread/host/kind) must rebase the cursor to the new baseline or
+              // the old source's marker would misread the new upstream.
+              const sourceChanged = eb.or([
+                eb("session_upstream_links.thread_id", "!=", eb.ref("excluded.thread_id")),
+                eb("session_upstream_links.host_id", "!=", eb.ref("excluded.host_id")),
+                eb("session_upstream_links.upstream_kind", "!=", eb.ref("excluded.upstream_kind")),
+              ]);
+              return {
+                agent_id: input.agentId,
+                catalog_id: input.catalogId,
+                host_id: input.hostId,
+                thread_id: input.threadId,
+                upstream_kind: input.upstreamKind,
+                upstream_ref_json: JSON.stringify(input.upstreamRef),
+                last_marker_json: eb
+                  .case()
+                  .when(sourceChanged)
+                  .then(JSON.stringify(input.marker))
+                  .else(eb.ref("session_upstream_links.last_marker_json"))
+                  .end(),
+                last_scanned_at: eb
+                  .case()
+                  .when(sourceChanged)
+                  .then(null)
+                  .else(eb.ref("session_upstream_links.last_scanned_at"))
+                  .end(),
+                updated_at: now,
+              };
             }),
           ),
       );
@@ -120,28 +142,54 @@ export function upsertSessionUpstreamLink(
   }
 }
 
+export function readSessionUpstreamLink(
+  sessionKey: string,
+  options: OpenClawStateDatabaseOptions = {},
+): SessionUpstreamLink | undefined {
+  try {
+    const { db } = openOpenClawStateDatabase(options);
+    const row = executeSqliteQuerySync(
+      db,
+      getSessionUpstreamKysely(db)
+        .selectFrom("session_upstream_links")
+        .selectAll()
+        .where("session_key", "=", sessionKey),
+    ).rows[0];
+    return row ? rowToSessionUpstreamLink(row) : undefined;
+  } catch (error) {
+    log.warn(`failed to read session upstream link: ${String(error)}`);
+    return undefined;
+  }
+}
+
 export function updateSessionUpstreamLinkMarker(
   sessionKey: string,
   marker: SessionUpstreamJsonValue,
-  options: OpenClawStateDatabaseOptions & { now?: number } = {},
-): void {
+  options: OpenClawStateDatabaseOptions & { now?: number; expectedUpdatedAt?: number } = {},
+): boolean {
   const now = options.now ?? Date.now();
   try {
+    let updated = false;
     runOpenClawStateWriteTransaction(({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getSessionUpstreamKysely(db)
-          .updateTable("session_upstream_links")
-          .set({
-            last_marker_json: JSON.stringify(marker),
-            last_scanned_at: now,
-            updated_at: now,
-          })
-          .where("session_key", "=", sessionKey),
-      );
+      let query = getSessionUpstreamKysely(db)
+        .updateTable("session_upstream_links")
+        .set({
+          last_marker_json: JSON.stringify(marker),
+          last_scanned_at: now,
+          updated_at: now,
+        })
+        .where("session_key", "=", sessionKey);
+      if (options.expectedUpdatedAt !== undefined) {
+        // CAS: a Continue can refresh the link mid-scan; a stale scan must not
+        // clobber the refreshed source's marker with the old source's cursor.
+        query = query.where("updated_at", "=", options.expectedUpdatedAt);
+      }
+      updated = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
     }, options);
+    return updated;
   } catch (error) {
     log.warn(`failed to update session upstream marker: ${String(error)}`);
+    return false;
   }
 }
 

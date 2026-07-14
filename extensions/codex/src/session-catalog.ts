@@ -57,7 +57,11 @@ import type {
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
-import { codexUpstreamBaseline, type CodexUpstreamBaseline } from "./session-upstream-marker.js";
+import {
+  codexLastTerminalTurnId,
+  codexUpstreamBaseline,
+  type CodexUpstreamBaseline,
+} from "./session-upstream-marker.js";
 
 const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
@@ -1239,9 +1243,8 @@ async function clearCreatedAdoptionBinding(params: {
 }
 
 function lastTerminalTurnId(thread: CodexThread): string | undefined {
-  return (
-    codexUpstreamBaseline(thread, (value) => boundedCatalogString(value, MAX_SESSION_ID_LENGTH))
-      .turnId ?? undefined
+  return codexLastTerminalTurnId(thread, (value) =>
+    boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
   );
 }
 

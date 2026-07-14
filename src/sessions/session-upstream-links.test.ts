@@ -82,7 +82,7 @@ describe("session upstream links", () => {
     expect([...listWatchedSessionUpstreamLinks(database)]).toEqual([]);
   });
 
-  it("preserves the scan marker when adoption metadata is refreshed", () => {
+  it("preserves the marker on same-source refresh and rebases it on source change", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:refresh";
     upsertLink(sessionKey, "claude", database);
@@ -92,6 +92,28 @@ describe("session upstream links", () => {
     );
     updateSessionUpstreamLinkMarker(sessionKey, { offset: 4 }, database);
 
+    // Same source (thread/host/kind unchanged): scan progress must survive.
+    upsertSessionUpstreamLink(
+      {
+        sessionKey,
+        agentId: "main",
+        catalogId: "claude",
+        hostId: "gateway:local",
+        threadId: `thread-${sessionKey}`,
+        upstreamKind: "claude-cli",
+        upstreamRef: { source: "refreshed" },
+        marker: { offset: 99 },
+      },
+      database,
+    );
+    expect(listWatchedSessionUpstreamLinks(database).get("claude")?.[0]).toEqual(
+      expect.objectContaining({
+        upstreamRef: { source: "refreshed" },
+        marker: { offset: 4 },
+      }),
+    );
+
+    // Source change: the old cursor is meaningless for the new thread; rebase.
     upsertSessionUpstreamLink(
       {
         sessionKey,
@@ -100,17 +122,16 @@ describe("session upstream links", () => {
         hostId: "gateway:local",
         threadId: "thread-refreshed",
         upstreamKind: "claude-cli",
-        upstreamRef: { source: "refreshed" },
+        upstreamRef: { source: "rebased" },
         marker: { offset: 99 },
       },
       database,
     );
-
     expect(listWatchedSessionUpstreamLinks(database).get("claude")?.[0]).toEqual(
       expect.objectContaining({
         threadId: "thread-refreshed",
-        upstreamRef: { source: "refreshed" },
-        marker: { offset: 4 },
+        upstreamRef: { source: "rebased" },
+        marker: { offset: 99 },
       }),
     );
   });

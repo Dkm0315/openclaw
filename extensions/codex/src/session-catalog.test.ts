@@ -1356,12 +1356,14 @@ describe("Codex supervision actions", () => {
     expect(baselines).toEqual([
       {
         connectionFingerprint: "catalog-connection",
-        turnId: "turn-failed",
+        // Marker baseline includes the active turn; history import below still
+        // stops at the last terminal turn.
+        turnId: "turn-active",
         userMessageCount: 0,
       },
       {
         connectionFingerprint: "catalog-connection",
-        turnId: "turn-failed",
+        turnId: "turn-active",
         userMessageCount: 0,
       },
     ]);

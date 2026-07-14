@@ -11,6 +11,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 import { recordSessionHumanDirectMessage } from "./session-state-events.js";
 import {
   listWatchedSessionUpstreamLinks,
+  readSessionUpstreamLink,
   updateSessionUpstreamLinkMarker,
 } from "./session-upstream-links.js";
 
@@ -117,18 +118,22 @@ export async function runSessionUpstreamMonitorTick(
         upstreamRef: link.upstreamRef,
         marker: link.marker,
       } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
-      const entry = (options.loadEntry ?? loadSessionEntry)({
-        sessionKey: probe.sessionKey,
-        agentId: probe.agentId,
-        clone: false,
-        ...(options.env ? { env: options.env } : {}),
-      });
-      // Active runs may still append upstream user items. Defer the scan so their
-      // marker remains available for positive transcript-provenance matching.
-      if (!entry?.sessionId || (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)) {
-        continue;
-      }
+      // One corrupt session store must not reject the whole tick; skip that link only.
       try {
+        const entry = (options.loadEntry ?? loadSessionEntry)({
+          sessionKey: probe.sessionKey,
+          agentId: probe.agentId,
+          clone: false,
+          ...(options.env ? { env: options.env } : {}),
+        });
+        // Active runs may still append upstream user items. Defer the scan so their
+        // marker remains available for positive transcript-provenance matching.
+        if (
+          !entry?.sessionId ||
+          (options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId)
+        ) {
+          continue;
+        }
         probes.push({
           ...probe,
           ownRecentUserTexts: await loadOwnRecentUserTexts(probe, entry, options),
@@ -141,11 +146,22 @@ export async function runSessionUpstreamMonitorTick(
       continue;
     }
     const probeBySessionKey = new Map(probes.map((probe) => [probe.sessionKey, probe]));
+    const linkUpdatedAtBySessionKey = new Map(
+      links.map((link) => [link.sessionKey, link.updatedAt]),
+    );
     try {
       const activities = await provider.checkUpstreamActivity(probes);
       for (const activity of activities) {
         const probe = probeBySessionKey.get(activity.sessionKey);
         if (!probe || !Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
+          continue;
+        }
+        // CAS guard: a Continue can refresh this link (new host/thread/source) while
+        // the provider scan was in flight; the stale scan must neither record from
+        // the old source nor clobber the refreshed marker.
+        const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
+        const currentLink = readSessionUpstreamLink(probe.sessionKey, dbOptions);
+        if (!currentLink || currentLink.updatedAt !== expectedUpdatedAt) {
           continue;
         }
         try {
@@ -164,6 +180,7 @@ export async function runSessionUpstreamMonitorTick(
           updateSessionUpstreamLinkMarker(probe.sessionKey, activity.nextMarker, {
             ...dbOptions,
             now: (options.now ?? Date.now)(),
+            ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
           });
           continue;
         }
@@ -180,7 +197,9 @@ export async function runSessionUpstreamMonitorTick(
             ...(activity.humanTurns > 1 ? { payload: { turns: activity.humanTurns } } : {}),
             occurredAt: activity.occurredAt as number,
           },
-          dbOptions,
+          // Local clock for bookkeeping: upstream occurredAt is event history only
+          // and is clamped inside the recorder against this same clock.
+          { ...dbOptions, now: (options.now ?? Date.now)() },
         );
         if (!recorded) {
           continue;
@@ -189,6 +208,7 @@ export async function runSessionUpstreamMonitorTick(
         updateSessionUpstreamLinkMarker(probe.sessionKey, activity.nextMarker, {
           ...dbOptions,
           now: (options.now ?? Date.now)(),
+          ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
         });
       }
     } catch (error) {
@@ -207,9 +227,13 @@ export function startSessionUpstreamMonitor(
       return;
     }
     running = true;
-    void runSessionUpstreamMonitorTick(options).finally(() => {
-      running = false;
-    });
+    void runSessionUpstreamMonitorTick(options)
+      .catch((error) => {
+        log.warn(`upstream monitor tick failed: ${String(error)}`);
+      })
+      .finally(() => {
+        running = false;
+      });
   };
   // Session catalogs own this bounded freshness exception; plugin metadata remains restart-stable.
   const initialTimer = setTimeout(run, SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS);

@@ -126,6 +126,117 @@ describe("session upstream monitor", () => {
     ).toEqual({ dedupe_key: `upstream:${watched}:8` });
   });
 
+  it("clamps skewed upstream event times without touching bookkeeping clocks", async () => {
+    const database = createDatabaseOptions();
+    const watched = "agent:main:adopted:clamped";
+    createLink(watched, "claude", database);
+    const now = 100 * 24 * 60 * 60_000;
+    const ancient = 1_000; // far beyond the 24h clamp window
+    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) =>
+      probes.map((probe) => ({
+        sessionKey: probe.sessionKey,
+        occurredAt: ancient,
+        humanTurns: 1,
+        nextMarker: { offset: 4 },
+        dedupeId: "4",
+      })),
+    );
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [claude],
+      now: () => now,
+      loadEntry: vi.fn(() => ({ sessionId: "session-clamped" }) as never),
+      loadOwnRecentUserTexts: async () => [],
+    });
+
+    const events = listSessionStateEventsSince(watched, "main", 0, 20, database).events;
+    expect(events).toHaveLength(1);
+    // Event time is clamped into [now - 24h, now]; cursor rows keep the local clock
+    // so a skewed upstream timestamp cannot age watch state into retention pruning.
+    expect(events[0]?.occurredAt).toBe(now - 24 * 60 * 60_000);
+    const cursor = openOpenClawStateDatabase(database)
+      .db.prepare("SELECT updated_at FROM session_watch_cursors WHERE target_session_key = ?")
+      .get(watched) as { updated_at: number };
+    expect(cursor.updated_at).toBe(now);
+  });
+
+  it("skips recording and marker writes when the link was refreshed mid-scan", async () => {
+    const database = createDatabaseOptions();
+    const watched = "agent:main:adopted:refreshed";
+    createLink(watched, "claude", database);
+    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) => {
+      // Simulate a Continue refreshing the link while the scan is in flight.
+      upsertSessionUpstreamLink(
+        {
+          sessionKey: watched,
+          agentId: "main",
+          catalogId: "claude",
+          hostId: "gateway:local",
+          threadId: "thread-refreshed",
+          upstreamKind: "claude-cli",
+          upstreamRef: { source: "refreshed" },
+          marker: { offset: 999 },
+        },
+        { ...database, now: 7_777 },
+      );
+      return probes.map((probe) => ({
+        sessionKey: probe.sessionKey,
+        occurredAt: 2_000,
+        humanTurns: 1,
+        nextMarker: { offset: 8 },
+        dedupeId: "stale-8",
+      }));
+    });
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [claude],
+      now: () => 3_000,
+      loadEntry: vi.fn(() => ({ sessionId: "session-refreshed" }) as never),
+      loadOwnRecentUserTexts: async () => [],
+    });
+
+    expect(listSessionStateEventsSince(watched, "main", 0, 20, database).events).toHaveLength(0);
+    const row = openOpenClawStateDatabase(database)
+      .db.prepare("SELECT last_marker_json FROM session_upstream_links WHERE session_key = ?")
+      .get(watched) as { last_marker_json: string };
+    expect(JSON.parse(row.last_marker_json)).toEqual({ offset: 999 });
+  });
+
+  it("isolates a session-entry load failure to that link", async () => {
+    const database = createDatabaseOptions();
+    const broken = "agent:main:adopted:broken";
+    const healthy = "agent:main:adopted:healthy";
+    createLink(broken, "claude", database);
+    createLink(healthy, "claude", database);
+    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) =>
+      probes.map((probe) => ({
+        sessionKey: probe.sessionKey,
+        occurredAt: 2_500,
+        humanTurns: 1,
+        nextMarker: { offset: 6 },
+        dedupeId: "6",
+      })),
+    );
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [claude],
+      now: () => 3_000,
+      loadEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => {
+        if (sessionKey === broken) {
+          throw new Error("corrupt session store");
+        }
+        return { sessionId: "session-healthy" } as never;
+      }) as never,
+      loadOwnRecentUserTexts: async () => [],
+    });
+
+    expect(listSessionStateEventsSince(broken, "main", 0, 20, database).events).toHaveLength(0);
+    expect(listSessionStateEventsSince(healthy, "main", 0, 20, database).events).toHaveLength(1);
+  });
+
   it("preserves a coalesced upstream burst count in the event payload", async () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:burst";

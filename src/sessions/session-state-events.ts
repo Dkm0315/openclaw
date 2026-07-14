@@ -44,6 +44,7 @@ type SessionStateEventInput = {
   dedupeKey?: string;
   summary: string;
   payload?: Record<string, unknown>;
+  occurredAt?: number;
   watcherSessionKeys?: readonly string[];
 };
 
@@ -300,11 +301,24 @@ export function classifySessionStateActor(opts: {
 }
 
 /** Append a signal-log event without allowing signaling failure to fail the originating action. */
+const SESSION_STATE_OCCURRED_AT_MAX_SKEW_MS = 24 * 60 * 60_000;
+
+// Upstream-sourced event times are display/history truth only. Bookkeeping clocks
+// (heads, cursors, prune scheduling) must use local time, or one skewed upstream
+// timestamp could age-out watch cursors instantly; the clamp bounds retention skew.
+function clampSessionStateOccurredAt(value: number | undefined, now: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return now;
+  }
+  return Math.min(Math.max(value, now - SESSION_STATE_OCCURRED_AT_MAX_SKEW_MS), now);
+}
+
 export function recordSessionStateEvent(
   input: SessionStateEventInput,
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): SessionStateEventRecord | undefined {
-  const occurredAt = options.now ?? Date.now();
+  const now = options.now ?? Date.now();
+  const occurredAt = clampSessionStateOccurredAt(input.occurredAt, now);
   const notices: Array<{
     watcherSessionKey: string;
     targetSessionKey: string;
@@ -342,7 +356,7 @@ export function recordSessionStateEvent(
             session_key: input.sessionKey,
             agent_id: input.agentId,
             last_sequence: insertedSequence,
-            updated_at: occurredAt,
+            updated_at: now,
           })
           .onConflict((conflict) =>
             // (session_key, agent_id) composite identity: under session.scope="global"
@@ -350,7 +364,7 @@ export function recordSessionStateEvent(
             // would let agents overwrite each other's version heads.
             conflict.columns(["session_key", "agent_id"]).doUpdateSet({
               last_sequence: insertedSequence,
-              updated_at: occurredAt,
+              updated_at: now,
             }),
           ),
       );
@@ -377,7 +391,7 @@ export function recordSessionStateEvent(
             watcherSessionKey,
             targetSessionKey: input.sessionKey,
             sequence: insertedSequence,
-            now: occurredAt,
+            now,
           });
           continue;
         }
@@ -389,7 +403,7 @@ export function recordSessionStateEvent(
           watcherSessionKey,
           targetSessionKey: input.sessionKey,
           sequence: insertedSequence,
-          now: occurredAt,
+          now,
         });
         notices.push({ watcherSessionKey, targetSessionKey: input.sessionKey, lastSeenSequence });
       }
@@ -407,8 +421,8 @@ export function recordSessionStateEvent(
     for (const notice of notices) {
       enqueueSessionStateNotice(notice);
     }
-    if (occurredAt - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
-      pruneSessionStateEvents({ ...options, now: occurredAt });
+    if (now - lastPruneAt > SESSION_STATE_PRUNE_INTERVAL_MS) {
+      pruneSessionStateEvents({ ...options, now });
     }
     return event;
   } catch (error) {
@@ -924,9 +938,10 @@ export function recordSessionHumanDirectMessage(
       ...(params.dedupeKey ? { dedupeKey: params.dedupeKey } : {}),
       summary: `human message via ${params.channel?.trim() || "unknown"}`,
       payload: params.payload,
+      ...(params.occurredAt === undefined ? {} : { occurredAt: params.occurredAt }),
       ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
     },
-    { ...options, ...(params.occurredAt === undefined ? {} : { now: params.occurredAt }) },
+    options,
   );
 }
 
