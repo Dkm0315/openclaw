@@ -1134,6 +1134,7 @@ type CodexSupervisionMarker = { sourceThreadId: string };
 type AdoptedSessionEntry = {
   key: string;
   sessionId: string;
+  boundThreadId: string;
 };
 
 function listSupervisionAgentIds(config: OpenClawConfig): string[] {
@@ -1167,9 +1168,11 @@ async function listAdoptedSessionEntries(params: {
       sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
     );
     const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
+    const boundThreadId = binding?.threadId.trim();
     if (
       binding?.connectionScope !== "supervision" ||
       !sourceThreadId ||
+      !boundThreadId ||
       sessionKeyRest !== adoptionSessionKey(sourceThreadId)
     ) {
       continue;
@@ -1177,7 +1180,7 @@ async function listAdoptedSessionEntries(params: {
     if (adopted.has(sourceThreadId)) {
       throw new Error(`multiple OpenClaw sessions adopt Codex thread ${sourceThreadId}`);
     }
-    adopted.set(sourceThreadId, { key: sessionKey, sessionId });
+    adopted.set(sourceThreadId, { key: sessionKey, sessionId, boundThreadId });
   }
   return adopted;
 }
@@ -1437,7 +1440,11 @@ async function createOrReuseAdoptedSession(params: {
         };
       },
     });
-    return { key: created.key, sessionId: created.sessionId };
+    return {
+      key: created.key,
+      sessionId: created.sessionId,
+      boundThreadId: params.sourceThread.id,
+    };
   } catch (error) {
     // Concurrent/retried Continue calls converge on the same trusted marker.
     // An unrelated entry at the deterministic key is never overwritten.
@@ -1511,8 +1518,8 @@ async function continueLocalCodexSessionInner(params: {
     threadId: params.threadId,
   });
   if (existing) {
-    const sourceThread = await params.control.readThread(params.threadId, true);
-    if (sourceThread.id !== params.threadId) {
+    const boundThread = await params.control.readThread(existing.boundThreadId, true);
+    if (boundThread.id !== existing.boundThreadId) {
       throw new Error("Codex app-server returned a different thread than requested");
     }
     // Catalog state can race archive/reset. Restore only the same locked generation
@@ -1542,7 +1549,7 @@ async function continueLocalCodexSessionInner(params: {
     if (connectionFingerprint) {
       params.onContinued?.({
         connectionFingerprint,
-        ...codexUpstreamBaseline(sourceThread, (value) =>
+        ...codexUpstreamBaseline(boundThread, (value) =>
           boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
         ),
       });
@@ -1568,9 +1575,16 @@ async function continueLocalCodexSessionInner(params: {
     sourceThread,
     connectionFingerprint,
   });
+  const baselineThread =
+    adopted.boundThreadId === sourceThread.id
+      ? sourceThread
+      : await params.control.readThread(adopted.boundThreadId, true);
+  if (baselineThread.id !== adopted.boundThreadId) {
+    throw new Error("Codex app-server returned a different thread than requested");
+  }
   params.onContinued?.({
     connectionFingerprint,
-    ...codexUpstreamBaseline(sourceThread, (value) =>
+    ...codexUpstreamBaseline(baselineThread, (value) =>
       boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
     ),
   });
