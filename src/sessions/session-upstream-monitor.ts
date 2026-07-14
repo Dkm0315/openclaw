@@ -156,14 +156,6 @@ export async function runSessionUpstreamMonitorTick(
         if (!probe || !Number.isSafeInteger(activity.humanTurns) || activity.humanTurns < 0) {
           continue;
         }
-        // CAS guard: a Continue can refresh this link (new host/thread/source) while
-        // the provider scan was in flight; the stale scan must neither record from
-        // the old source nor clobber the refreshed marker.
-        const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
-        const currentLink = readSessionUpstreamLink(probe.sessionKey, dbOptions);
-        if (!currentLink || currentLink.updatedAt !== expectedUpdatedAt) {
-          continue;
-        }
         try {
           // A run can start while the provider is scanning. Recheck ownership and
           // provenance before any marker advance so its prompt remains deferred.
@@ -174,6 +166,15 @@ export async function runSessionUpstreamMonitorTick(
           log.warn(
             `upstream transcript provenance failed for ${probe.sessionKey}: ${String(error)}`,
           );
+          continue;
+        }
+        // CAS guard AFTER the last await: a Continue can refresh this link (new
+        // host/thread/source) while the scan or provenance check was in flight.
+        // From here to the record the path is synchronous, so a stale scan can
+        // neither record from the old source nor clobber the refreshed marker.
+        const expectedUpdatedAt = linkUpdatedAtBySessionKey.get(activity.sessionKey);
+        const currentLink = readSessionUpstreamLink(probe.sessionKey, dbOptions);
+        if (!currentLink || currentLink.updatedAt !== expectedUpdatedAt) {
           continue;
         }
         if (activity.humanTurns === 0) {
