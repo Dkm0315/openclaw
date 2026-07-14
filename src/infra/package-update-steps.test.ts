@@ -6,6 +6,7 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { readPackageVersion } from "./package-json.js";
 import {
+  createGlobalInstallPreflightStep,
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "./package-update-steps.js";
@@ -538,12 +539,7 @@ describe("runGlobalPackageUpdateSteps", () => {
             if (!destination) {
               throw new Error("missing pack destination");
             }
-            expect(argv.slice(0, 4)).toEqual([
-              "npm",
-              "pack",
-              sourceSpec,
-              "--allow-git=all",
-            ]);
+            expect(argv.slice(0, 4)).toEqual(["npm", "pack", sourceSpec, "--allow-git=all"]);
             tarball = path.join(destination, "openclaw-2.0.0.tgz");
             await fs.writeFile(tarball, "packed\n", "utf8");
             return {
@@ -790,6 +786,17 @@ describe("runGlobalPackageUpdateSteps", () => {
       expect(result.failedStep?.stderrTail).toContain("upgrade pnpm to 10.4.0 or newer");
       await expect(readPackageVersion(packageRoot)).resolves.toBe("1.0.0");
     });
+  });
+
+  it("preserves the caller-owned preflight step label", () => {
+    const target = {
+      ...createPnpmTarget("/tmp/pnpm-global/5/node_modules"),
+      pnpmVersion: { major: 10, minor: 3, patch: 0 },
+    };
+
+    expect(
+      createGlobalInstallPreflightStep(target, "/tmp/openclaw", "global install preflight"),
+    ).toMatchObject({ name: "global install preflight", exitCode: 1 });
   });
 
   it("keeps a successful staged swap when old package cleanup hits a transient Windows native module error", async () => {

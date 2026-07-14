@@ -22,6 +22,7 @@ import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js"
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
+  createGlobalInstallPreflightStep,
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
 } from "../../infra/package-update-steps.js";
@@ -53,10 +54,9 @@ import {
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
+  resolveGlobalInstallLocation,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolveGlobalInstallPreflightError,
-  resolvePnpmGlobalDirFromGlobalRoot,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
@@ -470,29 +470,17 @@ async function runGitUpdate(params: {
       timeoutMs: effectiveTimeout,
       pkgRoot: params.root,
     });
-    const installLocation =
-      installTarget.manager === "pnpm"
-        ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
-        : null;
-    const installPreflightError = resolveGlobalInstallPreflightError(installTarget);
-    const installStep = installPreflightError
-      ? {
-          name: "global install preflight",
-          command: `${installTarget.command} --version`,
-          cwd: updateRoot,
-          durationMs: 0,
-          exitCode: 1,
-          stdoutTail: null,
-          stderrTail: installPreflightError,
-        }
-      : await runUpdateStep({
-          name: "global install",
-          argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
-          cwd: updateRoot,
-          env: installEnv,
-          timeoutMs: effectiveTimeout,
-          progress: params.progress,
-        });
+    const installLocation = resolveGlobalInstallLocation(installTarget);
+    const installStep =
+      createGlobalInstallPreflightStep(installTarget, updateRoot, "global install preflight") ??
+      (await runUpdateStep({
+        name: "global install",
+        argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
+        cwd: updateRoot,
+        env: installEnv,
+        timeoutMs: effectiveTimeout,
+        progress: params.progress,
+      }));
     steps.push(installStep);
 
     const failedStep = installStep.exitCode !== 0 ? installStep : null;

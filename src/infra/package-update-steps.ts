@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
+import { readPackageVersion } from "./package-json.js";
 import {
   isGitPackageInstallSpec,
   npmGitPackSourceAccessArgs,
 } from "./package-manager-install-policy.js";
-import { readPackageVersion } from "./package-json.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import {
@@ -24,8 +24,8 @@ import {
   globalInstallFallbackArgs,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallLocation,
   resolveGlobalInstallPreflightError,
   resolveGlobalInstallTarget,
   type CommandRunner,
@@ -81,6 +81,25 @@ const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 
 function isBlockingPackageUpdateStep(step: PackageUpdateStepResult): boolean {
   return step.exitCode !== 0 && step.advisory === undefined;
+}
+
+export function createGlobalInstallPreflightStep(
+  installTarget: ResolvedGlobalInstallTarget,
+  cwd: string,
+  name: string,
+): PackageUpdateStepResult | null {
+  const stderrTail = resolveGlobalInstallPreflightError(installTarget);
+  return stderrTail
+    ? {
+        name,
+        command: `${installTarget.command} --version`,
+        cwd,
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail,
+      }
+    : null;
 }
 
 function isNormalProcessExit(step: {
@@ -540,22 +559,17 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
-    const preflightError = resolveGlobalInstallPreflightError(params.installTarget);
-    if (preflightError) {
-      const failedStep: PackageUpdateStepResult = {
-        name: "global update preflight",
-        command: `${params.installTarget.command} --version`,
-        cwd: params.installCwd ?? params.installTarget.globalRoot ?? process.cwd(),
-        durationMs: 0,
-        exitCode: 1,
-        stdoutTail: null,
-        stderrTail: preflightError,
-      };
+    const preflightStep = createGlobalInstallPreflightStep(
+      params.installTarget,
+      params.installCwd ?? params.installTarget.globalRoot ?? process.cwd(),
+      "global update preflight",
+    );
+    if (preflightStep) {
       return {
-        steps: [failedStep],
+        steps: [preflightStep],
         verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
         afterVersion: null,
-        failedStep,
+        failedStep: preflightStep,
       };
     }
 
@@ -593,10 +607,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const installLocation =
-      stagedInstall?.prefix ??
-      (installCommandTarget.manager === "pnpm"
-        ? resolvePnpmGlobalDirFromGlobalRoot(installCommandTarget.globalRoot)
-        : null);
+      stagedInstall?.prefix ?? resolveGlobalInstallLocation(installCommandTarget);
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(

@@ -659,6 +659,10 @@ export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): 
   return /^\d+$/u.test(path.basename(layoutDir)) ? path.dirname(layoutDir) : null;
 }
 
+export function resolveGlobalInstallLocation(target: ResolvedGlobalInstallTarget): string | null {
+  return target.manager === "pnpm" ? resolvePnpmGlobalDirFromGlobalRoot(target.globalRoot) : null;
+}
+
 async function isPnpmGlobalPackageRoot(pkgRoot?: string | null): Promise<boolean> {
   const globalRoot = inferPnpmGlobalRootFromPackageRoot(pkgRoot);
   if (!globalRoot) {
