@@ -714,15 +714,10 @@ function resolveDevPreflightLintEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.
 }
 
 function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRunResult["reason"]> {
+  if (stepName.startsWith("global update") || stepName.startsWith("global install")) {
+    return "global-install-failed";
+  }
   switch (stepName) {
-    case "global update":
-    case "global update (omit optional)":
-    case "global update preflight":
-    case "global install preflight":
-    case "global install stage":
-    case "global install verify":
-    case "global install swap":
-      return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";
     case "ui:build (post-doctor repair)":
