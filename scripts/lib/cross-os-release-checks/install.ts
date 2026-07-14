@@ -309,8 +309,7 @@ export async function writePackageDistInventoryForCandidate(params: {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
-  // Matrix resolution runs before dependencies exist. Load the shared publish helper
-  // only after prepareCandidate has installed the source checkout.
+  // Matrix resolution runs before dependencies exist; load this only after prepareCandidate installs them.
   const { writePackageDistInventoryForPublish } = await import("../package-dist-inventory.ts");
   await writePackageDistInventoryForPublish(params.sourceDir, inventory);
 }
