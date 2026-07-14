@@ -854,6 +854,15 @@ describe("update global helpers", () => {
     expect(githubUrlArgs).toContain(
       "--allow-scripts=openclaw,https://github.com/openclaw/openclaw",
     );
+    for (const spec of [
+      "https://gitlab.com/openclaw/openclaw#main",
+      "https://bitbucket.org/openclaw/openclaw#main",
+      "https://git.sr.ht/~openclaw/openclaw#main",
+    ]) {
+      const argv = globalInstallArgs("npm", spec);
+      expect(argv).toContain("--allow-git=root");
+      expect(argv).toContain(`--allow-scripts=openclaw,${spec.split("#", 1)[0]}`);
+    }
     expect(globalInstallArgs("npm", "openclaw/openclaw#main")).toContain(
       "--allow-scripts=openclaw,openclaw/openclaw",
     );

@@ -1,3 +1,4 @@
+import hostedGitInfo from "hosted-git-info";
 import { parseSemver } from "./runtime-guard.js";
 
 export type PnpmVersion = {
@@ -5,8 +6,6 @@ export type PnpmVersion = {
   minor: number;
   patch: number;
 };
-
-const HOSTED_GIT_SCHEME_RE = /^(?:bitbucket|gist|github|gitlab):/iu;
 
 type VersionCommandRunner = (
   argv: string[],
@@ -41,24 +40,22 @@ function stripPackageAlias(packageName: string, spec: string): string {
 function isPnpmSourceInstallSpec(packageName: string, spec: string): boolean {
   const target = stripPackageAlias(packageName, spec);
   return (
-    HOSTED_GIT_SCHEME_RE.test(target) ||
+    hostedGitInfo.fromUrl(target) != null ||
     /^git\+(?:ssh|https|http|file):/i.test(target) ||
     /^git:/i.test(target)
   );
 }
 
 function isHttpGitInstallSpec(value: string): boolean {
+  if (hostedGitInfo.fromUrl(value) != null) {
+    return true;
+  }
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       return false;
     }
-    const pathname = url.pathname.replace(/\/+$/u, "");
-    if (pathname.endsWith(".git")) {
-      return true;
-    }
-    const parts = pathname.split("/").filter(Boolean);
-    return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
+    return url.pathname.replace(/\/+$/u, "").endsWith(".git");
   } catch {
     return false;
   }
@@ -74,7 +71,7 @@ function isGitInstallSpec(value: string): boolean {
       repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part))
     : false;
   return (
-    HOSTED_GIT_SCHEME_RE.test(value) ||
+    hostedGitInfo.fromUrl(value) != null ||
     /^git\+(?:ssh|https|http|file):/i.test(value) ||
     /^git:/i.test(value) ||
     /^ssh:\/\//i.test(value) ||

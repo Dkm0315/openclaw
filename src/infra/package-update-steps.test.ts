@@ -505,6 +505,18 @@ describe("runGlobalPackageUpdateSteps", () => {
       sourceSpec: "openclaw@https://github.com/openclaw/openclaw#main",
     },
     {
+      name: "hosted GitLab URL without git suffix",
+      sourceSpec: "https://gitlab.com/openclaw/openclaw#main",
+    },
+    {
+      name: "hosted Bitbucket URL without git suffix",
+      sourceSpec: "https://bitbucket.org/openclaw/openclaw#main",
+    },
+    {
+      name: "hosted SourceHut URL without git suffix",
+      sourceSpec: "https://git.sr.ht/~openclaw/openclaw#main",
+    },
+    {
       name: "GitHub shorthand",
       sourceSpec: "openclaw/openclaw#main",
     },
