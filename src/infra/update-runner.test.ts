@@ -3121,13 +3121,10 @@ describe("runGatewayUpdate", () => {
       onInstall: async () => writeGlobalPackageVersion(pkgRoot),
     });
 
-    await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: packageSpec },
-      async () => {
-        const result = await runWithCommand(runCommand, { cwd: pkgRoot });
-        expect(result.status).toBe("ok");
-      },
-    );
+    await withEnvAsync({ OPENCLAW_UPDATE_PACKAGE_SPEC: packageSpec }, async () => {
+      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+      expect(result.status).toBe("ok");
+    });
 
     expect(calls).toContain(expectedInstallCommand);
   });
