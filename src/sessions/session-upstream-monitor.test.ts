@@ -81,7 +81,7 @@ describe("session upstream monitor", () => {
         occurredAt: 2_000,
         humanTurns: 1,
         nextMarker: { offset: 8 },
-        dedupeToken: "8",
+        dedupeId: "8",
       })),
     );
     const claude = provider("claude", checkUpstreamActivity);
@@ -136,7 +136,7 @@ describe("session upstream monitor", () => {
         occurredAt: 5_000,
         humanTurns: 1,
         nextMarker: { turnId: "turn-2" },
-        dedupeToken: "turn-2",
+        dedupeId: "turn-2",
       },
     ]);
 
@@ -198,7 +198,7 @@ describe("session upstream monitor", () => {
           occurredAt: 2_000,
           humanTurns: 1,
           nextMarker: { offset: 12 },
-          dedupeToken: "12",
+          dedupeId: "12",
         },
       ];
     });
@@ -304,7 +304,7 @@ describe("session upstream monitor", () => {
             occurredAt: 10_000,
             humanTurns: 1,
             nextMarker: { offset: 24 },
-            dedupeToken: "24",
+            dedupeId: "24",
           },
         ]),
       ],

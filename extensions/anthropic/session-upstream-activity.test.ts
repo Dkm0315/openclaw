@@ -90,7 +90,7 @@ describe("Claude upstream activity", () => {
       occurredAt: Date.parse("2026-07-13T10:05:00.000Z"),
       humanTurns: 1,
       nextMarker: { offset: (await fs.stat(filePath)).size },
-      dedupeToken: String((await fs.stat(filePath)).size),
+      dedupeId: String((await fs.stat(filePath)).size),
     });
   });
 
@@ -209,7 +209,7 @@ describe("Claude upstream activity", () => {
         occurredAt: Date.parse("2026-07-13T10:07:00.000Z"),
         humanTurns: 1,
         nextMarker: { uuid: "item-3" },
-        dedupeToken: "item-3",
+        dedupeId: "item-3",
       },
     ]);
   });

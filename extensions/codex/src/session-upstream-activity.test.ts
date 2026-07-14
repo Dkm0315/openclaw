@@ -49,7 +49,7 @@ describe("Codex upstream activity", () => {
       occurredAt: 300_000,
       humanTurns: 1,
       nextMarker: { turnId: "turn-4", userMessageCount: 0 },
-      dedupeToken: "turn-4:0",
+      dedupeId: "turn-4:0",
     });
   });
 
@@ -65,7 +65,7 @@ describe("Codex upstream activity", () => {
 
     await expect(
       checkCodexUpstreamActivity([probe()], control, async () => "thread-canonical"),
-    ).resolves.toEqual([expect.objectContaining({ dedupeToken: "turn-2:1", humanTurns: 1 })]);
+    ).resolves.toEqual([expect.objectContaining({ dedupeId: "turn-2:1", humanTurns: 1 })]);
     expect(listTurnPage).toHaveBeenCalledWith({
       threadId: "thread-canonical",
       limit: 100,
@@ -106,7 +106,7 @@ describe("Codex upstream activity", () => {
       occurredAt: 100_000,
       humanTurns: 1,
       nextMarker: { turnId: "turn-1", userMessageCount: 2 },
-      dedupeToken: "turn-1:2",
+      dedupeId: "turn-1:2",
     });
   });
 

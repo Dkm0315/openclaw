@@ -107,7 +107,7 @@ export function classifyCodexUpstreamTurns(params: {
     humanTurns,
     nextMarker: { turnId: newest.id, userMessageCount: newestUserMessageCount },
     ...(humanTurns > 0
-      ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeToken: activityId }
+      ? { occurredAt: occurredAt ?? params.now ?? Date.now(), dedupeId: activityId }
       : {}),
   };
 }

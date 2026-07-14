@@ -42,7 +42,7 @@ export type SessionUpstreamActivity = {
   humanTurns: number;
   nextMarker: SessionUpstreamJsonValue;
   occurredAt?: number;
-  dedupeToken?: string;
+  dedupeId?: string;
 };
 
 export type SessionCatalogContinueProviderResult = {

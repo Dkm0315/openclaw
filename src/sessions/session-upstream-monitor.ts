@@ -167,7 +167,7 @@ export async function runSessionUpstreamMonitorTick(
           });
           continue;
         }
-        if (!Number.isFinite(activity.occurredAt) || !activity.dedupeToken) {
+        if (!Number.isFinite(activity.occurredAt) || !activity.dedupeId) {
           continue;
         }
         const recorded = recordSessionHumanDirectMessage(
@@ -176,7 +176,7 @@ export async function runSessionUpstreamMonitorTick(
             agentId: probe.agentId,
             actor: { actorType: "human" },
             channel: catalogId,
-            dedupeKey: `upstream:${probe.sessionKey}:${activity.dedupeToken}`,
+            dedupeKey: `upstream:${probe.sessionKey}:${activity.dedupeId}`,
             occurredAt: activity.occurredAt as number,
           },
           dbOptions,

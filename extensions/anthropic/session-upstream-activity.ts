@@ -157,7 +157,7 @@ export async function checkClaudeSessionUpstreamActivity(
       humanTurns,
       nextMarker: { offset: nextOffset },
       ...(humanTurns > 0
-        ? { occurredAt: occurredAt ?? stat.mtimeMs, dedupeToken: String(nextOffset) }
+        ? { occurredAt: occurredAt ?? stat.mtimeMs, dedupeId: String(nextOffset) }
         : {}),
     };
   } finally {
@@ -220,7 +220,7 @@ async function checkRemoteClaudeSessionUpstreamActivity(
     sessionKey: probe.sessionKey,
     humanTurns,
     nextMarker: { uuid: activityId },
-    ...(humanTurns > 0 ? { occurredAt: occurredAt ?? Date.now(), dedupeToken: activityId } : {}),
+    ...(humanTurns > 0 ? { occurredAt: occurredAt ?? Date.now(), dedupeId: activityId } : {}),
   };
 }
 
