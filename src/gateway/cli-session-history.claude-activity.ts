@@ -10,6 +10,7 @@ import {
 export type ClaudeCliHistoryLineClassification = {
   humanTurn: boolean;
   occurredAt?: number;
+  userText?: string;
 };
 
 function classifyClaudeCliHistoryEntry(params: {
@@ -49,6 +50,7 @@ function classifyClaudeCliHistoryEntry(params: {
   const occurredAt = resolveClaudeCliTimestampMs(entry.timestamp);
   return {
     humanTurn: true,
+    userText: candidates[0]?.text,
     ...(occurredAt === undefined ? {} : { occurredAt }),
   };
 }

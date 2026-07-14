@@ -209,7 +209,7 @@ describe("Claude session catalog", () => {
           ref: {
             filePath: expect.stringContaining(`${sessionId}.jsonl`),
           },
-          marker: { size: expect.any(Number) },
+          marker: { offset: expect.any(Number) },
         },
       }),
     );

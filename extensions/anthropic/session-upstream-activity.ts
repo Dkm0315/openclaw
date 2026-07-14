@@ -9,7 +9,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
 
-const MAX_CLAUDE_UPSTREAM_TAIL_BYTES = 256 * 1024;
+export const MAX_CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
 export const continueOperations = new Map<string, Promise<{ sessionKey: string }>>();
 
 export async function link(
@@ -30,7 +30,7 @@ export async function link(
           upstream: {
             kind: "claude-cli",
             ref: { filePath: record.filePath },
-            marker: { size: stat.size },
+            marker: { offset: stat.size },
           },
         }
       : { sessionKey };
@@ -89,12 +89,21 @@ function readFilePath(probe: SessionUpstreamProbe): string | undefined {
     : undefined;
 }
 
-function readMarkerSize(probe: SessionUpstreamProbe): number | undefined {
-  if (!isRecord(probe.marker) || !Number.isSafeInteger(probe.marker.size)) {
+function readMarkerOffset(probe: SessionUpstreamProbe): number | undefined {
+  if (!isRecord(probe.marker)) {
     return undefined;
   }
-  const size = probe.marker.size as number;
-  return size >= 0 ? size : undefined;
+  const offset = probe.marker.offset ?? probe.marker.size;
+  return Number.isSafeInteger(offset) && (offset as number) >= 0 ? (offset as number) : undefined;
+}
+
+function normalizeUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function isExternalUserText(probe: SessionUpstreamProbe, text: string | undefined): boolean {
+  const normalized = text === undefined ? "" : normalizeUserText(text);
+  return !probe.ownRecentUserTexts.includes(normalized);
 }
 
 export async function checkClaudeSessionUpstreamActivity(
@@ -104,32 +113,30 @@ export async function checkClaudeSessionUpstreamActivity(
     return undefined;
   }
   const filePath = readFilePath(probe);
-  const markerSize = readMarkerSize(probe);
-  if (!filePath || markerSize === undefined) {
+  const markerOffset = readMarkerOffset(probe);
+  if (!filePath || markerOffset === undefined) {
     return undefined;
   }
   const handle = await fs.open(filePath, "r");
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size <= markerSize) {
+    if (!stat.isFile() || stat.size <= markerOffset) {
       return undefined;
     }
-    const start = Math.max(markerSize, stat.size - MAX_CLAUDE_UPSTREAM_TAIL_BYTES);
-    const buffer = Buffer.allocUnsafe(stat.size - start);
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    const readLength = Math.min(stat.size - markerOffset, MAX_CLAUDE_UPSTREAM_SCAN_BYTES);
+    const buffer = Buffer.allocUnsafe(readLength);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, markerOffset);
     const tail = buffer.subarray(0, bytesRead);
     const lastNewline = tail.lastIndexOf(0x0a);
     if (lastNewline < 0) {
+      // Cursor movement requires a complete classified row. A row beyond the
+      // fixed per-tick cap stays deferred rather than skipping unknown bytes.
       return undefined;
     }
     const completeTail = tail.subarray(0, lastNewline + 1);
-    const boundedTail =
-      start > markerSize
-        ? completeTail.subarray(Math.max(0, completeTail.indexOf(0x0a) + 1))
-        : completeTail;
     let humanTurns = 0;
     let occurredAt: number | undefined;
-    for (const [lineIndex, line] of boundedTail.toString("utf8").split(/\r?\n/).entries()) {
+    for (const [lineIndex, line] of completeTail.toString("utf8").split(/\r?\n/).entries()) {
       if (!line.trim()) {
         continue;
       }
@@ -138,22 +145,20 @@ export async function checkClaudeSessionUpstreamActivity(
         cliSessionId: probe.threadId,
         sourceLineNumber: lineIndex + 1,
       });
-      if (!classification.humanTurn) {
+      if (!classification.humanTurn || !isExternalUserText(probe, classification.userText)) {
         continue;
       }
       humanTurns += 1;
       occurredAt = Math.max(occurredAt ?? 0, classification.occurredAt ?? stat.mtimeMs);
     }
-    if (humanTurns === 0) {
-      return undefined;
-    }
-    const nextSize = start + lastNewline + 1;
+    const nextOffset = markerOffset + lastNewline + 1;
     return {
       sessionKey: probe.sessionKey,
-      occurredAt: occurredAt ?? stat.mtimeMs,
       humanTurns,
-      nextMarker: { size: nextSize },
-      dedupeToken: String(nextSize),
+      nextMarker: { offset: nextOffset },
+      ...(humanTurns > 0
+        ? { occurredAt: occurredAt ?? stat.mtimeMs, dedupeToken: String(nextOffset) }
+        : {}),
     };
   } finally {
     await handle.close();
@@ -204,22 +209,18 @@ async function checkRemoteClaudeSessionUpstreamActivity(
       cliSessionId: probe.threadId,
       sourceLineNumber: itemIndex + 1,
     });
-    if (!classification.humanTurn) {
+    if (!classification.humanTurn || !isExternalUserText(probe, classification.userText)) {
       continue;
     }
     humanTurns += 1;
     occurredAt = Math.max(occurredAt ?? 0, classification.occurredAt ?? Date.now());
   }
-  if (humanTurns === 0) {
-    return undefined;
-  }
   const activityId = newest.uuid;
   return {
     sessionKey: probe.sessionKey,
-    occurredAt: occurredAt ?? Date.now(),
     humanTurns,
     nextMarker: { uuid: activityId },
-    dedupeToken: activityId,
+    ...(humanTurns > 0 ? { occurredAt: occurredAt ?? Date.now(), dedupeToken: activityId } : {}),
   };
 }
 
