@@ -15,22 +15,14 @@ import type {
 type TestWhatsAppInboundAdmissionOverrides = Partial<
   Omit<
     WhatsAppInboundAdmission,
-    | "account"
-    | "conversation"
-    | "sender"
-    | "ingress"
-    | "senderAccess"
-    | "commandAccess"
-    | "activationAccess"
+    "account" | "conversation" | "sender" | "ingress" | "turnAdmission"
   >
 > & {
   account?: Partial<WhatsAppInboundAdmission["account"]>;
   conversation?: Partial<WhatsAppInboundAdmission["conversation"]>;
   sender?: Partial<WhatsAppInboundAdmission["sender"]>;
   ingress?: Partial<WhatsAppInboundAdmission["ingress"]>;
-  senderAccess?: Partial<WhatsAppInboundAdmission["senderAccess"]>;
-  commandAccess?: Partial<WhatsAppInboundAdmission["commandAccess"]>;
-  activationAccess?: Partial<WhatsAppInboundAdmission["activationAccess"]>;
+  turnAdmission?: WhatsAppInboundAdmission["turnAdmission"];
 };
 
 type TestInboundMessageOverrides = Partial<
@@ -60,6 +52,25 @@ export function createTestWhatsAppInboundAdmission(
   const accountId = overrides.accountId ?? overrides.account?.accountId ?? "default";
   const kind = overrides.conversation?.kind ?? "direct";
 
+  const ingress: WhatsAppInboundAdmission["ingress"] = {
+    admission: "dispatch",
+    decision: "allow",
+    decisiveGateId: "activation",
+    reasonCode: "activation_allowed",
+    ...overrides.ingress,
+  };
+  const turnAdmission: WhatsAppInboundAdmission["turnAdmission"] =
+    overrides.turnAdmission ??
+    (ingress.admission === "dispatch"
+      ? { kind: "dispatch", reason: ingress.reasonCode }
+      : ingress.admission === "observe"
+        ? { kind: "observeOnly", reason: ingress.reasonCode }
+        : {
+            kind: "drop",
+            reason: ingress.reasonCode,
+            ...(ingress.admission === "skip" ? { recordHistory: false } : {}),
+          });
+
   return {
     accountId,
     isSelfChat: overrides.isSelfChat ?? false,
@@ -80,34 +91,8 @@ export function createTestWhatsAppInboundAdmission(
       id: overrides.sender?.id ?? conversationId,
       isSamePhone: overrides.sender?.isSamePhone ?? false,
     },
-    ingress: {
-      admission: "dispatch",
-      decision: "allow",
-      decisiveGateId: "activation",
-      reasonCode: "activation_allowed",
-      ...overrides.ingress,
-    },
-    senderAccess: {
-      allowed: true,
-      decision: "allow",
-      reasonCode: "dm_policy_allowlisted",
-      providerMissingFallbackApplied: false,
-      ...overrides.senderAccess,
-    },
-    commandAccess: {
-      requested: false,
-      authorized: false,
-      shouldBlockControlCommand: false,
-      reasonCode: "command_authorized",
-      ...overrides.commandAccess,
-    },
-    activationAccess: {
-      ran: true,
-      allowed: true,
-      shouldSkip: false,
-      reasonCode: "activation_allowed",
-      ...overrides.activationAccess,
-    },
+    ingress,
+    turnAdmission,
   };
 }
 
