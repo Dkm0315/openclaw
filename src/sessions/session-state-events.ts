@@ -890,7 +890,6 @@ export function registerSessionStateWatch(
   }
 }
 
-/** Record a direct human turn when the target has a parent or registered watcher. */
 export function recordSessionHumanDirectMessage(
   params: {
     sessionKey: string;
@@ -900,6 +899,7 @@ export function recordSessionHumanDirectMessage(
     channel?: string;
     runId?: string;
     dedupeKey?: string;
+    payload?: Record<string, unknown>;
     occurredAt?: number;
   },
   options: OpenClawStateDatabaseOptions = {},
@@ -908,8 +908,7 @@ export function recordSessionHumanDirectMessage(
   if (params.actor.actorType !== "human") {
     return undefined;
   }
-  // Unparented sessions record only when someone explicitly watches them: one
-  // indexed existence probe keeps ordinary un-watched human turns write-free.
+  // One indexed watcher probe keeps ordinary un-watched human turns write-free.
   if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey, options)) {
     return undefined;
   }
@@ -924,6 +923,7 @@ export function recordSessionHumanDirectMessage(
       runId: params.runId,
       ...(params.dedupeKey ? { dedupeKey: params.dedupeKey } : {}),
       summary: `human message via ${params.channel?.trim() || "unknown"}`,
+      payload: params.payload,
       ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
     },
     { ...options, ...(params.occurredAt === undefined ? {} : { now: params.occurredAt }) },

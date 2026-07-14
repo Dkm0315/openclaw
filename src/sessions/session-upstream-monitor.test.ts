@@ -118,11 +118,42 @@ describe("session upstream monitor", () => {
         occurredAt: 2_000,
       }),
     );
+    expect(events[0]?.payload).toBeUndefined();
     expect(
       openOpenClawStateDatabase(database)
         .db.prepare("SELECT dedupe_key FROM session_state_events WHERE session_key = ?")
         .get(watched),
     ).toEqual({ dedupe_key: `upstream:${watched}:8` });
+  });
+
+  it("preserves a coalesced upstream burst count in the event payload", async () => {
+    const database = createDatabaseOptions();
+    const sessionKey = "agent:main:adopted:burst";
+    createLink(sessionKey, "codex", database);
+
+    await runSessionUpstreamMonitorTick({
+      ...database,
+      providers: [
+        provider("codex", async () => [
+          {
+            sessionKey,
+            occurredAt: 2_000,
+            humanTurns: 3,
+            nextMarker: { turnId: "turn-3", userMessageCount: 1 },
+            dedupeId: "turn-3:1",
+          },
+        ]),
+      ],
+      loadEntry: () => ({ sessionId: "session-burst" }) as never,
+      loadOwnRecentUserTexts: async () => [],
+    });
+
+    expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([
+      expect.objectContaining({
+        kind: "human_direct_message",
+        payload: { turns: 3 },
+      }),
+    ]);
   });
 
   it("isolates provider failures", async () => {

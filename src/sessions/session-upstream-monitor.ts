@@ -177,6 +177,7 @@ export async function runSessionUpstreamMonitorTick(
             actor: { actorType: "human" },
             channel: catalogId,
             dedupeKey: `upstream:${probe.sessionKey}:${activity.dedupeId}`,
+            ...(activity.humanTurns > 1 ? { payload: { turns: activity.humanTurns } } : {}),
             occurredAt: activity.occurredAt as number,
           },
           dbOptions,
