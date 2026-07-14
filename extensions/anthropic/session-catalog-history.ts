@@ -11,7 +11,14 @@ function importedClaudeMessage(
   const timestamp = item.timestamp ? Date.parse(item.timestamp) : fallbackTimestamp;
   const text = item.text?.trim() || "[Unsupported Claude transcript item]";
   if (item.type === "userMessage") {
-    return { role: "user", content: text, timestamp } as AgentMessage;
+    // Imported native rows are not OpenClaw-authored; mirrorOrigin excludes them
+    // from self-echo provenance so a repeated native prompt stays observable.
+    return {
+      role: "user",
+      content: text,
+      timestamp,
+      __openclaw: { mirrorOrigin: "claude-catalog-import" },
+    } as AgentMessage;
   }
   const prefix =
     item.type === "reasoning"
