@@ -57,7 +57,7 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
 }
 
-export function buildCodexUpstreamPromptMessage(
+function buildCodexUpstreamPromptMessage(
   params: EmbeddedRunAttemptParams,
   identity: string,
   upstreamUserText?: string,

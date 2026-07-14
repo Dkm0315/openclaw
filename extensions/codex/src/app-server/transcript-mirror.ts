@@ -28,7 +28,7 @@ import {
   buildCodexUserPromptMessage,
 } from "./user-prompt-message.js";
 
-export { buildCodexUserPromptMessage, attachCodexMirrorIdentity };
+export { buildCodexUserPromptMessage };
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;

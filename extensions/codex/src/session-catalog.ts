@@ -1242,12 +1242,6 @@ async function clearCreatedAdoptionBinding(params: {
   );
 }
 
-function lastTerminalTurnId(thread: CodexThread): string | undefined {
-  return codexLastTerminalTurnId(thread, (value) =>
-    boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
-  );
-}
-
 function matchesPendingAdoptionBinding(
   binding: CodexAppServerThreadBinding | undefined,
   expected: {
@@ -1376,7 +1370,9 @@ async function createOrReuseAdoptedSession(params: {
   try {
     const label = params.sourceThread.name?.trim() || undefined;
     const spawnedCwd = params.sourceThread.cwd?.trim() || undefined;
-    const pendingLastTurnId = lastTerminalTurnId(params.sourceThread);
+    const pendingLastTurnId = codexLastTerminalTurnId(params.sourceThread, (value) =>
+      boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
+    );
     const marker: CodexSupervisionMarker = { sourceThreadId: params.sourceThread.id };
     const created = await params.api.runtime.agent.session.createSessionEntry({
       cfg: params.config,

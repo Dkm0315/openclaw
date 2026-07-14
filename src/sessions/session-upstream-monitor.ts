@@ -15,7 +15,7 @@ import {
   updateSessionUpstreamLinkMarker,
 } from "./session-upstream-links.js";
 
-export const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
+const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
 const SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS = 15_000;
 const SESSION_UPSTREAM_OWN_USER_TEXT_LIMIT = 10;
 

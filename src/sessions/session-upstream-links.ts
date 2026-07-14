@@ -32,8 +32,6 @@ export type SessionUpstreamLink = {
   updatedAt: number;
 };
 
-export type SessionUpstreamLinksByCatalog = Map<string, SessionUpstreamLink[]>;
-
 const log = createSubsystemLogger("sessions/upstream-links");
 
 function getSessionUpstreamKysely(db: DatabaseSync) {
@@ -225,7 +223,7 @@ export function deleteSessionUpstreamLink(
 
 export function listWatchedSessionUpstreamLinks(
   options: OpenClawStateDatabaseOptions = {},
-): SessionUpstreamLinksByCatalog {
+): Map<string, SessionUpstreamLink[]> {
   const grouped: SessionUpstreamLinksByCatalog = new Map();
   try {
     const { db } = openOpenClawStateDatabase(options);

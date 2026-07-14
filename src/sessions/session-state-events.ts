@@ -3,20 +3,14 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -29,6 +23,11 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
+import {
+  enqueueSessionStateNotice,
+  isNotifiableWatcherKey,
+  SESSION_STATE_CONTEXT_PREFIX,
+} from "./session-state-notices.js";
 import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 
 export type { SessionStateActorType } from "./session-state-event-kinds.js";
@@ -73,7 +72,6 @@ type SessionWatchCursorRow = Selectable<OpenClawStateKyselyDatabase["session_wat
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_PRUNE_INTERVAL_MS = 60 * 60_000;
-const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const log = createSubsystemLogger("sessions/state-events");
 let lastPruneAt = 0;
 
@@ -135,65 +133,6 @@ function bindSessionStateEvent(
     summary: input.summary,
     payload_json: input.payload ? JSON.stringify(input.payload) : null,
   };
-}
-
-function encodeNoticeTarget(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("hex");
-}
-
-export function decodeSessionStateNoticeContextKey(contextKey: string): string | undefined {
-  if (!contextKey.startsWith(SESSION_STATE_CONTEXT_PREFIX)) {
-    return undefined;
-  }
-  const encoded = contextKey.slice(SESSION_STATE_CONTEXT_PREFIX.length);
-  if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
-    return undefined;
-  }
-  return Buffer.from(encoded, "hex").toString("utf8");
-}
-
-// Terse on purpose: this line lands in model prompts, possibly repeatedly across
-// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
-// and the reconciliation call must be self-contained (explicit target sessionKey).
-function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
-}
-
-function shouldWakeWatcher(watcherSessionKey: string): boolean {
-  return !isSubagentSessionKey(watcherSessionKey);
-}
-
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices or cursors.
-function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
-function enqueueSessionStateNotice(params: {
-  watcherSessionKey: string;
-  targetSessionKey: string;
-  lastSeenSequence: number;
-}): void {
-  enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
-    sessionKey: params.watcherSessionKey,
-    contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
-  });
-  if (!shouldWakeWatcher(params.watcherSessionKey)) {
-    return;
-  }
-  // intent "immediate": event-intent wakes defer on heartbeat dueness, which would
-  // delay stale-state notices by up to the whole heartbeat interval. Task/cron
-  // wake-now paths use the same class; the flood guard remains the backstop.
-  requestHeartbeat({
-    source: "session-state",
-    intent: "immediate",
-    reason: `session-state:${params.targetSessionKey}`,
-    sessionKey: params.watcherSessionKey,
-  });
 }
 
 function readCursor(
@@ -916,7 +855,7 @@ export function recordSessionHumanDirectMessage(
     payload?: Record<string, unknown>;
     occurredAt?: number;
   },
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
 ): SessionStateEventRecord | undefined {
   const watcherSessionKey = params.entry?.spawnedBy ?? params.entry?.parentSessionKey;
   if (params.actor.actorType !== "human") {
